@@ -718,14 +718,17 @@ let currentLook = null; // { title, itemIds, explanation, tip, request, anchorId
 const aiImageCache = new Map();
 
 function setTab(name) {
-  const stylist = name === 'stylist';
-  $('closetView').hidden = stylist;
-  $('stylistView').hidden = !stylist;
-  $('tabCloset').classList.toggle('active', !stylist);
-  $('tabStylist').classList.toggle('active', stylist);
-  $('addBtn').classList.toggle('ghost', stylist);
+  const views = { closet: 'closetView', stylist: 'stylistView', looks: 'looksView' };
+  const tabs = { closet: 'tabCloset', stylist: 'tabStylist', looks: 'tabLooks' };
+  Object.keys(views).forEach((k) => {
+    $(views[k]).hidden = k !== name;
+    $(tabs[k]).classList.toggle('active', k === name);
+  });
+  $('addBtn').classList.toggle('ghost', name !== 'closet');
   window.scrollTo(0, 0);
-  if (stylist) renderStylist(); else render();
+  if (name === 'stylist') renderStylist();
+  else if (name === 'looks') renderFavorites();
+  else render();
 }
 
 const itemById = (id) => items.find((i) => i.id === id);
@@ -916,27 +919,38 @@ async function saveFavorite() {
   currentLook.savedId = fav.id;
   renderLook();
   await renderFavorites();
-  toast('הלוק נשמר באהובים ❤️');
+  toast('הלוק נשמר בלשונית „לוקים” ❤️');
 }
 
 async function renderFavorites() {
   const list = $('favList');
   const favs = (await getMeta('favorites')) || [];
   list.textContent = '';
-  if (!favs.length) { list.appendChild(el('p', 'muted', 'עוד אין לוקים שמורים. לוק שאהבת — לחצי „שמירה לאהובים”.')); return; }
+  if (!favs.length) {
+    const e = el('div', 'looks-empty');
+    e.appendChild(el('div', 'big', '🤍'));
+    e.appendChild(el('p', null, 'עוד אין לוקים שמורים.'));
+    e.appendChild(el('p', null, 'בקשי לוק בלשונית „סטייליסטית”, ולוק שאהבת — לחצי „❤️ שמירה”.'));
+    list.appendChild(e);
+    return;
+  }
   favs.forEach((f) => {
-    const b = el('button', 'fav');
-    const minis = el('div', 'minis');
-    if (f.image) { const im = el('img'); im.src = f.image; im.alt = ''; minis.appendChild(im); }
-    f.itemIds.slice(0, f.image ? 3 : 4).forEach((id) => {
-      const it = itemById(id);
-      if (it && it.thumb) { const im = el('img'); im.src = it.thumb; im.alt = ''; minis.appendChild(im); }
-      else minis.appendChild(el('div', 'mini-t'));
-    });
+    const b = el('button', 'fav-card');
+    if (f.image) {
+      const im = el('img', 'cover'); im.src = f.image; im.alt = ''; b.appendChild(im);
+    } else {
+      const col = el('div', 'collage');
+      f.itemIds.slice(0, 4).forEach((id) => {
+        const it = itemById(id);
+        if (it && it.thumb) { const im = el('img'); im.src = it.thumb; im.alt = ''; col.appendChild(im); }
+        else col.appendChild(el('div'));
+      });
+      b.appendChild(col);
+    }
     const t = el('div', 't');
     t.appendChild(el('b', null, f.title || 'לוק'));
     t.appendChild(el('small', null, formatDate(f.savedAt)));
-    b.appendChild(minis); b.appendChild(t);
+    b.appendChild(t);
     b.onclick = () => openFavorite(f);
     list.appendChild(b);
   });
@@ -1189,6 +1203,7 @@ function init() {
     await renderSettings();
   };
   $('tabCloset').onclick = () => setTab('closet');
+  $('tabLooks').onclick = () => setTab('looks');
   $('tabStylist').onclick = () => setTab('stylist');
   $('askBtn').onclick = () => askStylist();
   $('pwSaveBtn').onclick = savePassword;
