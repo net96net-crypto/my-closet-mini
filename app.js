@@ -486,7 +486,8 @@ async function requestItemImage({ category, description, prompt }) {
   let data = null;
   try { data = await res.json(); } catch (_) { /* handled below */ }
   if (!res.ok || !data || !data.image) {
-    const e = new Error((data && data.message) || 'לא הצלחתי לצייר את הבגד. נסי שוב.');
+    const base = (data && data.message) || `לא הצלחתי לצייר את הבגד (קוד ${res.status}).`;
+    const e = new Error(data && data.detail ? `${base}\nפרטים: ${data.detail}` : base);
     e.code = data && data.error;
     throw e;
   }
@@ -540,7 +541,7 @@ async function illustrateAll() {
   if (!confirm(`ליצור תמונות המחשה ל-${todo.length} בגדים? זה לוקח כ-15 שניות לבגד. אפשר לעצור באמצע.`)) return;
   illusRunning = true; illusStop = false;
   $('illusAllBtn').textContent = 'עצירה';
-  let done = 0, failed = 0, quota = false;
+  let done = 0, failed = 0, quota = false, firstError = '';
   for (const it of todo) {
     if (illusStop) break;
     $('illusBarText').textContent = `מציירת ${done + failed + 1} מתוך ${todo.length}…`;
@@ -552,11 +553,13 @@ async function illustrateAll() {
       await refresh();
     } catch (err) {
       failed++;
+      if (!firstError) firstError = err.message;
       if (err.code === 'image_quota' || err.code === 'bad_password' || err.code === 'bad_key') { quota = true; toast(err.message); break; }
     }
   }
   illusRunning = false;
   await refresh();
+  if (firstError && !quota) alert('חלק מהתמונות לא נוצרו. השגיאה:\n\n' + firstError);
   if (!quota) toast(`${done === 1 ? 'נוצרה תמונה אחת' : `נוצרו ${done} תמונות`}${failed ? (failed === 1 ? ', אחת לא הצליחה — אפשר לנסות שוב' : `, ${failed} לא הצליחו — אפשר לנסות שוב`) : ''}`);
 }
 
@@ -986,6 +989,7 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
     let data = null;
     try { data = await res.json(); } catch (_) { /* handled below */ }
     if (!res.ok) {
+      if (data && data.detail) data.message = `${data.message || ''}\nפרטים: ${data.detail}`;
       if (res.status === 401) { await setMeta('stylistPassword', ''); stylistConnected = false; $('connectCard').hidden = false; }
       throw new Error((data && data.message) || 'הסטייליסטית לא זמינה כרגע. נסי שוב.');
     }

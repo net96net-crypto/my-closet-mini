@@ -163,6 +163,11 @@ async function authorized(request, env) {
   return Boolean(env.APP_PASSWORD) && (await safeEqual(pw, env.APP_PASSWORD));
 }
 
+function errDetail(err) {
+  const status = err && err.status ? err.status + ' ' : '';
+  return (status + String((err && (err.message || err.name)) || err)).slice(0, 300);
+}
+
 async function runImage(env, fullPrompt, seed, cors, extra = {}) {
   try {
     const out = await env.AI.run(IMAGE_MODEL, { prompt: fullPrompt, steps: 8, seed });
@@ -212,8 +217,12 @@ async function handleItemImage(request, env, cors) {
         cache_read_input_tokens: msg.usage?.cache_read_input_tokens ?? 0, cache_creation_input_tokens: msg.usage?.cache_creation_input_tokens ?? 0,
       };
     } catch (err) {
-      if (err instanceof Anthropic.AuthenticationError) return json({ error: 'bad_key', message: 'המפתח של Claude לא תקין.' }, 502, cors);
-      return json({ error: 'translate_error', message: 'לא הצלחתי להבין את התיאור. נסי שוב.' }, 502, cors);
+      const detail = errDetail(err);
+      if (err instanceof Anthropic.AuthenticationError) return json({ error: 'bad_key', message: 'המפתח של Claude לא תקין.', detail }, 502, cors);
+      if (err instanceof Anthropic.APIError && /credit|balance/i.test(String(err.message))) {
+        return json({ error: 'no_credit', message: 'נגמר הקרדיט בחשבון Anthropic.', detail }, 502, cors);
+      }
+      return json({ error: 'translate_error', message: 'לא הצלחתי להבין את התיאור. נסי שוב.', detail }, 502, cors);
     }
     if (!prompt) return json({ error: 'translate_error', message: 'לא הצלחתי להבין את התיאור. נסי שוב.' }, 502, cors);
   }
@@ -240,7 +249,7 @@ export default {
 
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     if (url.pathname === '/health') {
-      return json({ ok: true, configured: Boolean(env.ANTHROPIC_API_KEY && env.APP_PASSWORD) }, 200, cors);
+      return json({ ok: true, configured: Boolean(env.ANTHROPIC_API_KEY && env.APP_PASSWORD), images: Boolean(env.AI) }, 200, cors);
     }
     if (url.pathname === '/image' && request.method === 'POST') return handleImage(request, env, cors);
     if (url.pathname === '/item-image' && request.method === 'POST') return handleItemImage(request, env, cors);
@@ -299,9 +308,10 @@ export default {
           error: credit ? 'no_credit' : 'api_error',
           message: credit ? 'נגמר הקרדיט בחשבון Anthropic.' : 'הסטייליסטית לא הצליחה לענות. נסי שוב.',
           status: err.status,
+          detail: errDetail(err),
         }, 502, cors);
       }
-      return json({ error: 'server_error', message: 'תקלה זמנית. נסי שוב.' }, 502, cors);
+      return json({ error: 'server_error', message: 'תקלה זמנית. נסי שוב.', detail: errDetail(err) }, 502, cors);
     }
 
     if (msg.stop_reason === 'refusal') {
