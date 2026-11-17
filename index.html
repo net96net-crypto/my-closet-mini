@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#faf6f2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="MY CLOSET">
+  <title>MY CLOSET MINI</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>MY CLOSET <span>MINI</span></h1>
+      <p id="count" class="count"></p>
+    </div>
+    <button id="settingsBtn" class="icon-btn" aria-label="גיבוי והגדרות">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></svg>
+    </button>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="חיפוש בתיאורים…" autocomplete="off">
+  </div>
+  <nav id="chips" class="chips" aria-label="קטגוריות"></nav>
+
+  <main>
+    <section id="grid" class="grid" aria-live="polite"></section>
+    <div id="empty" class="empty" hidden>
+      <div class="empty-icon">👗</div>
+      <h2>הארון שלך עדיין ריק</h2>
+      <p>לחצי על <b>+</b> כדי להוסיף בגד ראשון —<br>עם תמונה, או רק עם תיאור.</p>
+    </div>
+  </main>
+
+  <button id="addBtn" class="fab" aria-label="הוספת בגד">+</button>
+
+  <!-- Add / edit item -->
+  <div id="itemSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="itemTitle">
+    <div class="sheet-panel">
+      <div class="sheet-head">
+        <button class="text-btn" data-close>ביטול</button>
+        <h2 id="itemTitle">בגד חדש</h2>
+        <button id="saveBtn" class="text-btn strong">שמירה</button>
+      </div>
+      <div class="sheet-body">
+        <div id="photoBox" class="photo-box">
+          <img id="photoPreview" alt="" hidden>
+          <div id="photoEmpty" class="photo-empty">
+            <div class="cam">📷</div>
+            <div>הוספת תמונה</div>
+            <small>צילום או בחירה מהגלריה (לא חובה)</small>
+          </div>
+          <div id="photoBusy" class="photo-busy" hidden>מעבדת תמונה…</div>
+        </div>
+        <input id="photoInput" type="file" accept="image/*" hidden>
+        <div class="photo-actions">
+          <button id="changePhotoBtn" class="pill" hidden>החלפת תמונה</button>
+          <button id="removePhotoBtn" class="pill danger" hidden>הסרת תמונה</button>
+        </div>
+
+        <label class="field-label">קטגוריה</label>
+        <div id="catPicker" class="cat-picker"></div>
+
+        <label class="field-label" for="descInput">תיאור</label>
+        <textarea id="descInput" rows="4" placeholder="למשל: חולצת פשתן לבנה, מכופתרת, שרוול ארוך. מתאימה לקיץ ולעבודה."></textarea>
+        <p class="hint">בלי תמונה — התיאור הוא מה שיופיע בארון. כדאי לכתוב צבע, בד, גזרה ומתי לובשים.</p>
+        <p id="itemError" class="error" hidden></p>
+
+        <button id="deleteBtn" class="wide-btn danger" hidden>מחיקת הבגד</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings / backup -->
+  <div id="settingsSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="sheet-panel">
+      <div class="sheet-head">
+        <span></span>
+        <h2 id="settingsTitle">גיבוי ושמירה</h2>
+        <button class="text-btn strong" data-close>סגירה</button>
+      </div>
+      <div class="sheet-body">
+        <div class="card-info">
+          <p><b>איפה הבגדים שלך נשמרים?</b><br>
+          רק באייפון הזה, בתוך האפליקציה. הם לא נשלחים לשום מקום.</p>
+          <p class="muted" id="storageStatus"></p>
+        </div>
+
+        <button id="backupBtn" class="wide-btn primary">שמירת קובץ גיבוי</button>
+        <p class="hint">יוצר קובץ אחד עם כל הבגדים, התמונות והתיאורים. שמרי אותו ב-iCloud Drive („שמירה בקבצים”).</p>
+        <p class="muted" id="lastBackup"></p>
+
+        <button id="restoreBtn" class="wide-btn">שחזור מקובץ גיבוי</button>
+        <input id="restoreInput" type="file" accept=".json,application/json" hidden>
+        <p class="hint">מוסיף לארון את הבגדים מהקובץ. בגדים שכבר בארון לא יימחקו.</p>
+        <p id="settingsMsg" class="msg" hidden></p>
+
+        <div class="card-info small">
+          <p><b>חשוב לדעת</b></p>
+          <ul>
+            <li>מחיקת נתוני Safari או הסרת האפליקציה ממסך הבית — מוחקת את הארון.</li>
+            <li>אין סנכרון בין מכשירים. לטלפון חדש — משחזרים מקובץ הגיבוי.</li>
+            <li>כדאי לשמור גיבוי חדש אחרי שמוסיפים כמה בגדים.</li>
+          </ul>
+        </div>
+        <p class="version">גרסה 1.0</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
