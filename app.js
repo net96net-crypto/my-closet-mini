@@ -517,6 +517,8 @@ async function illustrateDraft(again) {
     renderPhoto();
   } catch (err) {
     showItemError(err.message);
+    $('itemError').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    alert('לא הצלחתי לצייר את הבגד.\n\n' + err.message);
   } finally {
     $('photoBusy').hidden = true;
     $('photoBusy').textContent = 'מעבדת תמונה…';

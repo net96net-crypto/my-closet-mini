@@ -165,7 +165,9 @@ async function authorized(request, env) {
 
 function errDetail(err) {
   const status = err && err.status ? err.status + ' ' : '';
-  return (status + String((err && (err.message || err.name)) || err)).slice(0, 300);
+  const d = (status + String((err && (err.message || err.name)) || err)).slice(0, 300);
+  console.error('stylist-error', d);
+  return d;
 }
 
 async function runImage(env, fullPrompt, seed, cors, extra = {}) {
@@ -175,6 +177,7 @@ async function runImage(env, fullPrompt, seed, cors, extra = {}) {
     return json({ image: 'data:image/jpeg;base64,' + out.image, seed, ...extra }, 200, cors);
   } catch (err) {
     const msg = String(err && err.message || err);
+    console.error('image-error', msg.slice(0, 300));
     const quota = /limit|quota|neuron|4006/i.test(msg);
     return json({
       error: quota ? 'image_quota' : 'image_error',
