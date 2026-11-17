@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
   <header class="topbar">
@@ -71,6 +71,17 @@
       <div id="anchorChip" class="anchor" hidden></div>
       <textarea id="requestInput" rows="3" placeholder="למשל: תעשי לי לוק למחר — יום עבודה, צפוי חם"></textarea>
       <div id="quickChips" class="quick"></div>
+      <label class="field-label">סגנון הלוק</label>
+      <div id="boldSeg" class="seg">
+        <button data-v="solid">🤍 סולידי</button><button data-v="balanced">⚖️ מאוזן</button><button data-v="bold">✨ נועז</button>
+      </div>
+      <div class="seg-row">
+        <span class="muted">סטייליסטית:</span>
+        <div id="qualitySeg" class="seg small">
+          <button data-v="economy">חסכונית</button><button data-v="pro">מקצועית</button>
+        </div>
+      </div>
+      <p id="qualityHint" class="hint"></p>
       <button id="askBtn" class="wide-btn primary">✨ בקשי לוק</button>
       <p id="askError" class="error" hidden></p>
     </section>
@@ -222,6 +233,8 @@
           <p><b>הסטייליסטית</b></p>
           <p id="stylistStatus" class="muted"></p>
           <button id="pwResetBtn" class="pill">החלפת סיסמה</button>
+          <p id="feedbackStatus" class="muted" style="margin-top:10px"></p>
+          <button id="feedbackResetBtn" class="pill" hidden>איפוס המשוב</button>
           <p class="muted" style="margin-top:8px">כשמבקשים לוק, התיאורים ותמונות קטנות של הבגדים נשלחים ל-Claude (Anthropic) כדי לבחור. הם לא נעשים ציבוריים.</p>
         </div>
 
@@ -240,6 +253,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

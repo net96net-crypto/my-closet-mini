@@ -345,6 +345,9 @@ async function renderSettings() {
   } catch (_) { /* ignore */ }
   if (isIOS() && !isStandalone()) status += ' כדי ש-Safari לא ימחק את הארון, פתחי את האפליקציה מהאייקון במסך הבית.';
   $('storageStatus').textContent = status;
+  const fbn = ((await getMeta('feedback')) || []).length;
+  $('feedbackStatus').textContent = fbn ? `לוקים שסימנת כ"נועזים מדי": ${fbn}. הסטייליסטית לומדת מהם.` : '';
+  $('feedbackResetBtn').hidden = !fbn;
   $('stylistStatus').textContent = (await getMeta('stylistPassword'))
     ? 'מחוברת — הסיסמה שמורה באייפון הזה.'
     : 'עוד לא מחוברת. מתחברים בלשונית „סטייליסטית”.';
@@ -360,6 +363,7 @@ async function backup() {
     style: (await getMeta('style')) || '',
     inspiration: (await getMeta('inspiration')) || [],
     favorites: (await getMeta('favorites')) || [],
+    feedback: (await getMeta('feedback')) || [],
   };
   const day = new Date().toISOString().slice(0, 10);
   const name = `my-closet-backup-${day}.json`;
@@ -450,6 +454,13 @@ async function onRestoreChosen(e) {
     const have = new Set(cur.map((f) => f.id));
     const add = data.favorites.filter((f) => f && typeof f.id === 'string' && !have.has(f.id) && Array.isArray(f.itemIds));
     if (add.length) { await setMeta('favorites', cur.concat(add)); extra.push(add.length === 1 ? 'לוק אהוב אחד' : `${add.length} לוקים אהובים`); }
+  }
+
+  if (Array.isArray(data.feedback)) {
+    const cur = (await getMeta('feedback')) || [];
+    const have = new Set(cur.map((f) => f.at));
+    const add = data.feedback.filter((f) => f && typeof f.text === 'string' && typeof f.at === 'string' && !have.has(f.at));
+    if (add.length) await setMeta('feedback', cur.concat(add).sort((a, b) => a.at.localeCompare(b.at)).slice(-FEEDBACK_MAX));
   }
 
   await refresh();
@@ -696,6 +707,11 @@ async function saveBulk() {
 
 /* ---------- Stylist ---------- */
 
+const QUALITY_HINT = {
+  economy: 'חסכונית: מהירה וזולה מאוד (כ-0.2 סנט ללוק). מתאימה ליום-יום.',
+  pro: 'מקצועית: מדויקת יותר בבקשות מורכבות, יקרה יותר (כ-5 סנט ללוק).',
+};
+const FEEDBACK_MAX = 12;
 const QUICK_REQUESTS = ['לוק למחר', 'לוק לעבודה', 'לוק לערב בחוץ', 'לוק נוח לסופ״ש', 'משהו שעוד לא לבשתי'];
 let anchorId = null;   // item the look must include
 let currentLook = null; // { title, itemIds, explanation, tip, request, anchorId, excluded, savedId }
@@ -714,7 +730,16 @@ function setTab(name) {
 
 const itemById = (id) => items.find((i) => i.id === id);
 
+async function renderSegs() {
+  const bold = (await getMeta('boldness')) || 'solid';
+  const quality = (await getMeta('quality')) || 'economy';
+  document.querySelectorAll('#boldSeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === bold));
+  document.querySelectorAll('#qualitySeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === quality));
+  $('qualityHint').textContent = QUALITY_HINT[quality];
+}
+
 async function renderStylist() {
+  await renderSegs();
   $('connectCard').hidden = Boolean(await getMeta('stylistPassword'));
   const style = ((await getMeta('style')) || '').trim();
   const insp = (await getMeta('inspiration')) || [];
@@ -788,7 +813,16 @@ function renderLook() {
   again.onclick = () => askStylist({ another: true });
   actions.appendChild(save); actions.appendChild(again);
   p.appendChild(actions);
-  if (currentLook.costCents != null) p.appendChild(el('p', 'cost', `עלות משוערת של הבקשה: כ-${currentLook.costCents.toFixed(1)} סנט`));
+  const actions2 = el('div', 'actions second');
+  const tooBold = el('button', 'wide-btn', currentLook.feedbackGiven ? '👎 נרשם — לוק סולידי יותר בדרך' : '👎 נועז מדי בשבילי');
+  tooBold.disabled = Boolean(currentLook.feedbackGiven);
+  tooBold.onclick = markTooBold;
+  actions2.appendChild(tooBold);
+  p.appendChild(actions2);
+  if (currentLook.costCents != null) {
+    const c = currentLook.costCents;
+    p.appendChild(el('p', 'cost', `עלות משוערת של הבקשה: ${c < 0.1 ? 'פחות מ-0.1' : 'כ-' + c.toFixed(1)} סנט`));
+  }
 }
 
 function lookFigure() {
@@ -846,6 +880,25 @@ async function generateLookImage() {
     look.imageError = err instanceof TypeError ? 'אין חיבור. נסי שוב.' : err.message;
   }
   if (currentLook === look) renderLook();
+}
+
+function describeLook(look) {
+  const parts = look.itemIds.map((id) => {
+    const it = itemById(id);
+    return it ? `${catLabel(it.category)}: ${it.description || 'פריט עם תמונה'}` : null;
+  }).filter(Boolean);
+  return `${look.title ? look.title + ' — ' : ''}${parts.join(' + ')}`;
+}
+
+async function markTooBold() {
+  if (!currentLook || currentLook.feedbackGiven) return;
+  const fb = (await getMeta('feedback')) || [];
+  fb.push({ at: new Date().toISOString(), text: describeLook(currentLook) });
+  await setMeta('feedback', fb.slice(-FEEDBACK_MAX));
+  currentLook.feedbackGiven = true;
+  renderLook();
+  toast('תודה! אזכור שזה נועז מדי בשבילך');
+  await askStylist({ another: true, softer: true });
 }
 
 async function saveFavorite() {
@@ -932,14 +985,15 @@ async function aiImage(it) {
   return small;
 }
 
-function estimateCents(u) {
-  // Opus-tier list prices, USD per million tokens: input 4, output 20, cache write 5, cache read 0.2.
+function estimateCents(u, model) {
+  // List prices, USD per million tokens [input, output, cache write, cache read].
   if (!u) return null;
-  const usd = (u.input_tokens * 4 + u.output_tokens * 20 + u.cache_creation_input_tokens * 5 + u.cache_read_input_tokens * 0.2) / 1e6;
+  const pr = /haiku/.test(model || '') ? [0.1, 0.5, 0.125, 0.01] : [4, 20, 5, 0.2];
+  const usd = (u.input_tokens * pr[0] + u.output_tokens * pr[1] + u.cache_creation_input_tokens * pr[2] + u.cache_read_input_tokens * pr[3]) / 1e6;
   return usd * 100;
 }
 
-async function askStylist({ swapItemId = null, another = false } = {}) {
+async function askStylist({ swapItemId = null, another = false, softer = false } = {}) {
   const pw = await getMeta('stylistPassword');
   const errBox = $('askError');
   errBox.hidden = true;
@@ -956,6 +1010,10 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
     if (swapItemId) excluded.push(swapItemId);
   }
   if (another && currentLook) request = `${request || 'לוק'} — הפעם לוק שונה מהקודם (${currentLook.itemIds.join(', ')}).`;
+  if (softer) request += ' הלוק הקודם היה נועז מדי בשבילה — הפעם סולידי וקלאסי יותר בבירור.';
+  const boldness = softer ? 'solid' : ((await getMeta('boldness')) || 'solid');
+  const quality = (await getMeta('quality')) || 'economy';
+  const feedback = ((await getMeta('feedback')) || []).map((f) => f.text);
 
   $('askBtn').disabled = true;
   $('thinking').hidden = false;
@@ -982,6 +1040,7 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
       look: swapItemId ? currentLook.itemIds : undefined,
       swapItemId: swapItemId || undefined,
       excluded,
+      boldness, quality, feedback,
     };
     const res = await fetch(STYLIST_URL, {
       method: 'POST',
@@ -997,7 +1056,7 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
     }
     currentLook = {
       ok: data.ok, title: data.title, itemIds: data.item_ids || [], explanation: data.explanation, tip: data.tip,
-      request, anchorId: anchor, excluded, savedId: null, costCents: estimateCents(data.usage),
+      request, anchorId: anchor, excluded, savedId: null, costCents: estimateCents(data.usage, data.model),
       imagePrompt: data.ok ? data.image_prompt || '' : '', image: null, imageState: null,
     };
   } catch (err) {
@@ -1122,6 +1181,13 @@ function init() {
   $('bulkSaveBtn').onclick = saveBulk;
 
   // Stylist
+  document.querySelectorAll('#boldSeg button').forEach((b) => { b.onclick = async () => { await setMeta('boldness', b.dataset.v); renderSegs(); }; });
+  document.querySelectorAll('#qualitySeg button').forEach((b) => { b.onclick = async () => { await setMeta('quality', b.dataset.v); renderSegs(); }; });
+  $('feedbackResetBtn').onclick = async () => {
+    if (!confirm('למחוק את כל המשוב "נועז מדי" שנשמר?')) return;
+    await setMeta('feedback', []);
+    await renderSettings();
+  };
   $('tabCloset').onclick = () => setTab('closet');
   $('tabStylist').onclick = () => setTab('stylist');
   $('askBtn').onclick = () => askStylist();

@@ -11,7 +11,8 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 
-const MODEL = 'claude-opus-5-5';
+const MODELS = { pro: 'claude-opus-5-5', economy: 'claude-haiku-5-5' };
+const MODEL = MODELS.pro;
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ITEMS = 400;
 const MAX_INSPIRATION = 8;
@@ -36,11 +37,20 @@ const SYSTEM = `את סטייליסטית אישית בתוך האפליקציה
 - בוחרים פריטים אך ורק מתוך רשימת הבגדים של המשתמשת, לפי ה-id שלהם. אסור להמציא פריטים או להציע לקנות.
 - לוק אחד בלבד בכל תשובה, בדרך כלל 2–5 פריטים: בסיס (שמלה, או חלק עליון + חלק תחתון), ואם יש ומתאים — נעליים, שכבה עליונה, תיק או אביזר.
 - לא לבחור שני פריטים שממלאים אותו תפקיד (למשל שני מכנסיים, או שמלה יחד עם חצאית), אלא אם זה שכבות הגיוניות.
-- להתחשב בסגנון האישי ובתמונות ההשראה, אם צורפו, ובבקשה עצמה (אירוע, מזג אוויר, תחושה).
+- "הסגנון האישי" שהמשתמשת כתבה הוא חוק מחייב, לא השראה: כל מה שכתוב שם שהיא לא אוהבת/לא לובשת — אסור לבחור. מה שהיא אוהבת — להעדיף.
+- רמת הנועזות שהיא ביקשה מחייבת (מופיעה בבקשה). בספק בין שתי אפשרויות — לבחור את הבטוחה והקלאסית יותר.
+- לוקים שהיא סימנה בעבר כ"נועזים מדי" מלמדים מה לא מתאים לה: להתרחק מצירופים, צבעים ורמת בולטות דומים.
+- להתחשב בתמונות ההשראה, אם צורפו, ובבקשה עצמה (אירוע, מזג אוויר, תחושה).
 - פריט שמופיע רק עם תיאור (בלי תמונה) הוא פריט אמיתי לכל דבר.
 - אם אין בארון מספיק פריטים כדי להרכיב לוק סביר — ok=false, item_ids ריק, ובהסבר כתבי בעדינות מה חסר.
 - ההסבר: 2–3 משפטים. הטיפ: משפט אחד או ריק.
 - image_prompt: באנגלית, עבור מחולל תמונות שיצייר את הלוק על דוגמנית. תארי במדויק כל פריט שבחרת — צבע מדויק, גזרה, אורך, בד, פרטים בולטים — לפי התמונות והתיאורים, ובאותו סדר מלמעלה למטה. אל תוסיפי פריטים שלא בחרת (אם לא בחרת נעליים — כתבי simple neutral shoes). אל תתארי את פני הדוגמנית או גוף מסוים מעבר ל-"a woman". בלי טקסט, לוגואים או שמות מותגים. עד 90 מילים.`;
+
+const BOLDNESS = {
+  solid: 'רמת נועזות: סולידית. לוק קלאסי, נקי ונוח ללבישה: צבעים שקטים וניטרליים או צבע בולט אחד לכל היותר, גזרות מוכרות, בלי שילובי הדפסים, בלי פריטים דרמטיים יחד. משהו שאפשר ללבוש בלי לחשוב פעמיים.',
+  balanced: 'רמת נועזות: מאוזנת. בסיס קלאסי עם נגיעה אחת מעניינת (צבע, טקסטורה או אביזר).',
+  bold: 'רמת נועזות: נועזת. מותר צירופים מפתיעים, צבעים חזקים ושילובים לא שגרתיים — עדיין בתוך הדברים שהיא לא פוסלת בסגנון שלה.',
+};
 
 const IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
 const IMAGE_STYLE = 'Full-body fashion catalog photograph, entire figure visible from head to toe with space above the head and below the feet, centered, standing naturally, front view, plain light warm-grey seamless studio background, soft even lighting, realistic fabric texture, sharp focus. Outfit: ';
@@ -109,8 +119,12 @@ function buildContent(body) {
     for (const s of body.inspiration) content.push({ type: 'image', source: { type: 'base64', ...s } });
   }
 
-  // 3) The request itself.
-  const parts = [`תאריך היום: ${body.today}.`];
+  // 3) Feedback memory, boldness and the request itself.
+  if (body.feedback.length) {
+    text('לוקים שהמשתמשת סימנה בעבר כ"נועזים מדי" (מהישן לחדש):\n' +
+      body.feedback.map((f, i) => `${i + 1}. ${f}`).join('\n'));
+  }
+  const parts = [`תאריך היום: ${body.today}.`, BOLDNESS[body.boldness]];
   if (body.mode === 'swap') {
     parts.push(`הלוק הנוכחי (ids): ${body.look.join(', ')}.`);
     parts.push(`המשתמשת ביקשה להחליף את הפריט ${body.swapItemId}. החזירי את הלוק המלא מחדש, עם פריט אחר מהארון במקומו (לא ${body.swapItemId}), ושמרי את שאר הפריטים אם הם עדיין מתאימים.`);
@@ -122,7 +136,7 @@ function buildContent(body) {
   return content;
 }
 
-async function askClaude(env, content, { system = SYSTEM, schema = LOOK_SCHEMA, effort = 'medium', maxTokens = 16000 } = {}) {
+async function askClaude(env, content, { system = SYSTEM, schema = LOOK_SCHEMA, effort = 'medium', maxTokens = 16000, model = MODEL } = {}) {
   const client = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
     maxRetries: 2,
@@ -130,13 +144,14 @@ async function askClaude(env, content, { system = SYSTEM, schema = LOOK_SCHEMA, 
     ...(env.ANTHROPIC_BASE_URL ? { baseURL: env.ANTHROPIC_BASE_URL } : {}), // local testing only
   });
   const params = {
-    model: MODEL,
+    model,
     max_tokens: maxTokens,
     system,
     cache_control: { type: 'ephemeral' },
     output_config: { effort, format: { type: 'json_schema', schema } },
     messages: [{ role: 'user', content }],
   };
+  if (model === MODELS.economy) return await client.messages.create(params); // no server-side fallback for Haiku
   try {
     // Server-side fallback: if the model declines, the API retries on a fallback model.
     return await client.beta.messages.create({
@@ -211,7 +226,7 @@ async function handleItemImage(request, env, cors) {
   if (!prompt) {
     try {
       const msg = await askClaude(env, [{ type: 'text', text: `קטגוריה: ${category}\nתיאור: ${description}` }],
-        { system: ITEM_SYSTEM, schema: ITEM_SCHEMA, effort: 'low', maxTokens: 4000 });
+        { system: ITEM_SYSTEM, schema: ITEM_SCHEMA, effort: 'low', maxTokens: 4000, model: MODELS.economy });
       if (msg.stop_reason === 'refusal') throw new Error('refusal');
       const tb = msg.content.find((b) => b.type === 'text');
       prompt = str(JSON.parse(tb ? tb.text : '{}').prompt, 800).trim();
@@ -293,11 +308,14 @@ export default {
       style: str(raw.style, 6000),
       today: str(raw.today, 40) || new Date().toISOString().slice(0, 10),
       inspiration: (Array.isArray(raw.inspiration) ? raw.inspiration : []).map(parseDataUrl).filter(Boolean).slice(0, MAX_INSPIRATION),
+      boldness: ['solid', 'balanced', 'bold'].includes(raw.boldness) ? raw.boldness : 'solid',
+      feedback: (Array.isArray(raw.feedback) ? raw.feedback : []).map((f) => str(f, 600)).filter(Boolean).slice(-12),
+      quality: raw.quality === 'pro' ? 'pro' : 'economy',
     };
 
     let msg;
     try {
-      msg = await askClaude(env, buildContent(body));
+      msg = await askClaude(env, buildContent(body), { model: MODELS[body.quality] });
     } catch (err) {
       if (err instanceof Anthropic.AuthenticationError) {
         return json({ error: 'bad_key', message: 'המפתח של Claude לא תקין. צריך לבדוק אותו ב-Cloudflare.' }, 502, cors);
@@ -335,6 +353,7 @@ export default {
       explanation: str(out.explanation, 1500),
       tip: str(out.tip, 500),
       image_prompt: str(out.image_prompt, 1200),
+      model: msg.model,
       usage: {
         input_tokens: msg.usage?.input_tokens ?? 0,
         output_tokens: msg.usage?.output_tokens ?? 0,
