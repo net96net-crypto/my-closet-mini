@@ -1,0 +1,12 @@
+{
+  // The stylist's small server. Secrets (ANTHROPIC_API_KEY, APP_PASSWORD) are set
+  // in the Cloudflare dashboard only — never in this file.
+  "name": "stylist",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_ORIGINS": "https://net96net-crypto.github.io,http://localhost:8765"
+  }
+}

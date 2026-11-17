@@ -18,7 +18,11 @@ const catLabel = (id) => (CATEGORIES.find((c) => c.id === id) || CATEGORIES[CATE
 
 const PHOTO_MAX = 1400;   // longest side of the stored photo, px
 const THUMB_MAX = 480;    // longest side of the grid thumbnail, px
+const AI_IMAGE_MAX = 384; // longest side of photos sent to the stylist, px
+const INSP_MAX = 900;     // longest side of stored inspiration photos, px
+const MAX_INSPIRATION = 8;
 const BACKUP_FORMAT = 'my-closet-mini-backup';
+const STYLIST_URL = (window.STYLIST_URL_OVERRIDE || 'https://stylist.my-closet-mini.workers.dev') + '/stylist';
 
 /* ---------- Storage (IndexedDB, on this device only) ---------- */
 
@@ -212,6 +216,7 @@ function openItem(it) {
   $('itemTitle').textContent = it ? 'עריכת בגד' : 'בגד חדש';
   $('descInput').value = it ? it.description || '' : '';
   $('deleteBtn').hidden = !it;
+  $('anchorBtn').hidden = !it;
   $('itemError').hidden = true;
   $('saveBtn').disabled = false;
   renderCatPicker();
@@ -322,6 +327,9 @@ async function renderSettings() {
   } catch (_) { /* ignore */ }
   if (isIOS() && !isStandalone()) status += ' כדי ש-Safari לא ימחק את הארון, פתחי את האפליקציה מהאייקון במסך הבית.';
   $('storageStatus').textContent = status;
+  $('stylistStatus').textContent = (await getMeta('stylistPassword'))
+    ? 'מחוברת — הסיסמה שמורה באייפון הזה.'
+    : 'עוד לא מחוברת. מתחברים בלשונית „סטייליסטית”.';
 }
 
 function settingsMsg(text) { $('settingsMsg').textContent = text; $('settingsMsg').hidden = false; }
@@ -329,7 +337,12 @@ function settingsMsg(text) { $('settingsMsg').textContent = text; $('settingsMsg
 async function backup() {
   const all = await getAllItems();
   if (all.length === 0) { settingsMsg('הארון ריק — אין עדיין מה לגבות.'); return; }
-  const data = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), items: all };
+  const data = {
+    format: BACKUP_FORMAT, version: 2, exportedAt: new Date().toISOString(), items: all,
+    style: (await getMeta('style')) || '',
+    inspiration: (await getMeta('inspiration')) || [],
+    favorites: (await getMeta('favorites')) || [],
+  };
   const day = new Date().toISOString().slice(0, 10);
   const name = `my-closet-backup-${day}.json`;
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
@@ -399,12 +412,345 @@ async function onRestoreChosen(e) {
     settingsMsg('השחזור נכשל. ייתכן שאין מספיק מקום באייפון.');
     return;
   }
+  // Style, inspiration, favorites (backup version 2+). Never overwrite what's already here.
+  const extra = [];
+  if (typeof data.style === 'string' && data.style.trim() && !((await getMeta('style')) || '').trim()) {
+    await setMeta('style', data.style.slice(0, 6000));
+    extra.push('הסגנון שלך');
+  }
+  if (Array.isArray(data.inspiration)) {
+    const cur = (await getMeta('inspiration')) || [];
+    if (cur.length === 0) {
+      const insp = data.inspiration.filter((s) => typeof s === 'string' && s.startsWith('data:image/')).slice(0, MAX_INSPIRATION);
+      if (insp.length) { await setMeta('inspiration', insp); extra.push(insp.length === 1 ? 'תמונת השראה אחת' : `${insp.length} תמונות השראה`); }
+    }
+  }
+  if (Array.isArray(data.favorites)) {
+    const cur = (await getMeta('favorites')) || [];
+    const have = new Set(cur.map((f) => f.id));
+    const add = data.favorites.filter((f) => f && typeof f.id === 'string' && !have.has(f.id) && Array.isArray(f.itemIds));
+    if (add.length) { await setMeta('favorites', cur.concat(add)); extra.push(add.length === 1 ? 'לוק אהוב אחד' : `${add.length} לוקים אהובים`); }
+  }
+
   await refresh();
   await renderSettings();
+  await renderStylist();
   const skipped = data.items.length - good.length;
   let msg = `השחזור הושלם: ${good.length} בגדים בקובץ, ${added} חדשים נוספו לארון.`;
+  if (extra.length) msg += ` שוחזרו גם: ${extra.join(', ')}.`;
   if (skipped) msg += ` ${skipped} פריטים פגומים דולגו.`;
   settingsMsg(msg);
+}
+
+/* ---------- Stylist ---------- */
+
+const QUICK_REQUESTS = ['לוק למחר', 'לוק לעבודה', 'לוק לערב בחוץ', 'לוק נוח לסופ״ש', 'משהו שעוד לא לבשתי'];
+let anchorId = null;   // item the look must include
+let currentLook = null; // { title, itemIds, explanation, tip, request, anchorId, excluded, savedId }
+const aiImageCache = new Map();
+
+function setTab(name) {
+  const stylist = name === 'stylist';
+  $('closetView').hidden = stylist;
+  $('stylistView').hidden = !stylist;
+  $('tabCloset').classList.toggle('active', !stylist);
+  $('tabStylist').classList.toggle('active', stylist);
+  $('addBtn').classList.toggle('ghost', stylist);
+  window.scrollTo(0, 0);
+  if (stylist) renderStylist();
+}
+
+const itemById = (id) => items.find((i) => i.id === id);
+
+async function renderStylist() {
+  $('connectCard').hidden = Boolean(await getMeta('stylistPassword'));
+  const style = ((await getMeta('style')) || '').trim();
+  const insp = (await getMeta('inspiration')) || [];
+  let sum = style ? style.slice(0, 120) : 'עוד לא כתבת. ספרי לסטייליסטית מה את אוהבת.';
+  if (insp.length) sum += insp.length === 1 ? ' · תמונת השראה אחת' : ` · ${insp.length} תמונות השראה`;
+  $('styleSummary').textContent = sum;
+
+  const a = $('anchorChip');
+  const anchor = anchorId && itemById(anchorId);
+  if (!anchor) anchorId = null;
+  a.hidden = !anchor;
+  a.textContent = '';
+  if (anchor) {
+    a.appendChild(el('span', null, `עם: ${anchor.description || catLabel(anchor.category)}`));
+    const x = el('button', null, '✕');
+    x.setAttribute('aria-label', 'ביטול');
+    x.onclick = () => { anchorId = null; renderStylist(); };
+    a.appendChild(x);
+  }
+  renderLook();
+  await renderFavorites();
+}
+
+function lookItemCard(id, { swappable }) {
+  const it = itemById(id);
+  const box = el('div', 'look-item' + (it ? '' : ' gone'));
+  if (it && it.thumb) {
+    const img = el('img'); img.src = it.thumb; img.alt = ''; box.appendChild(img);
+    const cap = el('div', 'cap');
+    cap.appendChild(el('div', 'cat', catLabel(it.category)));
+    if (it.description) { const d = el('div', 'desc', it.description); d.dir = 'auto'; cap.appendChild(d); }
+    box.appendChild(cap);
+  } else {
+    const t = el('div', 'textcard');
+    if (it) t.appendChild(el('div', 'cat', catLabel(it.category)));
+    const big = el('div', 'big', it ? it.description : 'הפריט נמחק מהארון');
+    big.dir = 'auto';
+    t.appendChild(big);
+    box.appendChild(t);
+  }
+  if (swappable && it) {
+    const b = el('button', 'swap', '🔄 החליפי פריט זה');
+    b.onclick = () => askStylist({ swapItemId: id });
+    box.appendChild(b);
+  }
+  return box;
+}
+
+function renderLook() {
+  const p = $('lookPanel');
+  p.textContent = '';
+  if (!currentLook) { p.hidden = true; return; }
+  p.hidden = false;
+  if (!currentLook.ok) {
+    p.appendChild(el('h2', null, currentLook.title || 'לא הצלחתי להרכיב לוק'));
+    p.appendChild(el('p', 'expl', currentLook.explanation));
+    return;
+  }
+  p.appendChild(el('h2', null, currentLook.title || 'הלוק שלך'));
+  const grid = el('div', 'look-items');
+  currentLook.itemIds.forEach((id) => grid.appendChild(lookItemCard(id, { swappable: true })));
+  p.appendChild(grid);
+  if (currentLook.explanation) p.appendChild(el('p', 'expl', currentLook.explanation));
+  if (currentLook.tip) p.appendChild(el('p', 'tip', '💡 ' + currentLook.tip));
+  const actions = el('div', 'actions');
+  const save = el('button', 'wide-btn primary', currentLook.savedId ? '❤️ נשמר' : '❤️ שמירה');
+  save.disabled = Boolean(currentLook.savedId);
+  save.onclick = saveFavorite;
+  const again = el('button', 'wide-btn', 'לוק אחר');
+  again.onclick = () => askStylist({ another: true });
+  actions.appendChild(save); actions.appendChild(again);
+  p.appendChild(actions);
+  if (currentLook.costCents != null) p.appendChild(el('p', 'cost', `עלות משוערת של הבקשה: כ-${currentLook.costCents.toFixed(1)} סנט`));
+}
+
+async function saveFavorite() {
+  if (!currentLook || currentLook.savedId) return;
+  const favs = (await getMeta('favorites')) || [];
+  const fav = {
+    id: newId(), title: currentLook.title, itemIds: currentLook.itemIds.slice(),
+    explanation: currentLook.explanation, tip: currentLook.tip, request: currentLook.request,
+    savedAt: new Date().toISOString(),
+  };
+  favs.unshift(fav);
+  await setMeta('favorites', favs);
+  askPersistentStorage();
+  currentLook.savedId = fav.id;
+  renderLook();
+  await renderFavorites();
+  toast('הלוק נשמר באהובים ❤️');
+}
+
+async function renderFavorites() {
+  const list = $('favList');
+  const favs = (await getMeta('favorites')) || [];
+  list.textContent = '';
+  if (!favs.length) { list.appendChild(el('p', 'muted', 'עוד אין לוקים שמורים. לוק שאהבת — לחצי „שמירה לאהובים”.')); return; }
+  favs.forEach((f) => {
+    const b = el('button', 'fav');
+    const minis = el('div', 'minis');
+    f.itemIds.slice(0, 4).forEach((id) => {
+      const it = itemById(id);
+      if (it && it.thumb) { const im = el('img'); im.src = it.thumb; im.alt = ''; minis.appendChild(im); }
+      else minis.appendChild(el('div', 'mini-t'));
+    });
+    const t = el('div', 't');
+    t.appendChild(el('b', null, f.title || 'לוק'));
+    t.appendChild(el('small', null, formatDate(f.savedAt)));
+    b.appendChild(minis); b.appendChild(t);
+    b.onclick = () => openFavorite(f);
+    list.appendChild(b);
+  });
+}
+
+function openFavorite(f) {
+  const body = $('lookSheetBody');
+  body.textContent = '';
+  body.classList.add('look');
+  $('lookSheetTitle').textContent = f.title || 'לוק אהוב';
+  const grid = el('div', 'look-items');
+  f.itemIds.forEach((id) => grid.appendChild(lookItemCard(id, { swappable: false })));
+  body.appendChild(grid);
+  if (f.explanation) body.appendChild(el('p', 'expl', f.explanation));
+  if (f.tip) body.appendChild(el('p', 'tip', '💡 ' + f.tip));
+  if (f.request) body.appendChild(el('p', 'muted', `הבקשה: ${f.request}`));
+  const del = el('button', 'wide-btn danger', 'מחיקה מהאהובים');
+  del.onclick = async () => {
+    if (!confirm('למחוק את הלוק מהאהובים?')) return;
+    const favs = ((await getMeta('favorites')) || []).filter((x) => x.id !== f.id);
+    await setMeta('favorites', favs);
+    if (currentLook && currentLook.savedId === f.id) currentLook.savedId = null;
+    closeSheet('lookSheet');
+    await renderStylist();
+    toast('הלוק נמחק מהאהובים');
+  };
+  body.appendChild(del);
+  openSheet('lookSheet');
+}
+
+async function aiImage(it) {
+  if (!it.thumb) return null;
+  const key = it.id + '|' + (it.updatedAt || '');
+  if (aiImageCache.has(key)) return aiImageCache.get(key);
+  const img = new Image();
+  img.src = it.thumb;
+  await img.decode();
+  const small = resizeToDataURL(img, AI_IMAGE_MAX, 0.75);
+  aiImageCache.set(key, small);
+  return small;
+}
+
+function estimateCents(u) {
+  // Opus-tier list prices, USD per million tokens: input 4, output 20, cache write 5, cache read 0.2.
+  if (!u) return null;
+  const usd = (u.input_tokens * 4 + u.output_tokens * 20 + u.cache_creation_input_tokens * 5 + u.cache_read_input_tokens * 0.2) / 1e6;
+  return usd * 100;
+}
+
+async function askStylist({ swapItemId = null, another = false } = {}) {
+  const pw = await getMeta('stylistPassword');
+  const errBox = $('askError');
+  errBox.hidden = true;
+  if (!pw) { errBox.textContent = 'קודם צריך לחבר את הסטייליסטית עם הסיסמה (למעלה).'; errBox.hidden = false; return; }
+  if (items.length === 0) { errBox.textContent = 'הארון ריק. הוסיפי כמה בגדים קודם.'; errBox.hidden = false; return; }
+
+  let request = $('requestInput').value.trim();
+  let anchor = anchorId;
+  let excluded = [];
+  if ((swapItemId || another) && currentLook) {
+    request = currentLook.request;
+    anchor = currentLook.anchorId;
+    excluded = (currentLook.excluded || []).slice();
+    if (swapItemId) excluded.push(swapItemId);
+  }
+  if (another && currentLook) request = `${request || 'לוק'} — הפעם לוק שונה מהקודם (${currentLook.itemIds.join(', ')}).`;
+
+  $('askBtn').disabled = true;
+  $('thinking').hidden = false;
+  if (!swapItemId) { currentLook = null; renderLook(); }
+  document.querySelectorAll('.look-item .swap').forEach((b) => { b.disabled = true; });
+  $('thinking').scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  try {
+    const payloadItems = [];
+    for (const it of items) {
+      payloadItems.push({ id: it.id, category: catLabel(it.category), description: it.description || '', image: await aiImage(it) });
+    }
+    const insp = (await getMeta('inspiration')) || [];
+    const inspiration = [];
+    for (const src of insp) {
+      const img = new Image(); img.src = src; await img.decode();
+      inspiration.push(resizeToDataURL(img, 512, 0.75));
+    }
+    const body = {
+      mode: swapItemId ? 'swap' : 'new',
+      request, anchorItemId: anchor, items: payloadItems, inspiration,
+      style: (await getMeta('style')) || '',
+      today: new Date().toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+      look: swapItemId ? currentLook.itemIds : undefined,
+      swapItemId: swapItemId || undefined,
+      excluded,
+    };
+    const res = await fetch(STYLIST_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-App-Password': pw },
+      body: JSON.stringify(body),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* handled below */ }
+    if (!res.ok) {
+      if (res.status === 401) { await setMeta('stylistPassword', ''); $('connectCard').hidden = false; }
+      throw new Error((data && data.message) || 'הסטייליסטית לא זמינה כרגע. נסי שוב.');
+    }
+    currentLook = {
+      ok: data.ok, title: data.title, itemIds: data.item_ids || [], explanation: data.explanation, tip: data.tip,
+      request, anchorId: anchor, excluded, savedId: null, costCents: estimateCents(data.usage),
+    };
+  } catch (err) {
+    const offline = err instanceof TypeError;
+    errBox.textContent = offline ? 'אין חיבור לסטייליסטית. בדקי שיש אינטרנט ונסי שוב.' : err.message;
+    errBox.hidden = false;
+  } finally {
+    $('askBtn').disabled = false;
+    $('thinking').hidden = true;
+    renderLook();
+    if (currentLook) $('lookPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+async function savePassword() {
+  const v = $('pwInput').value.trim();
+  if (!v) return;
+  await setMeta('stylistPassword', v);
+  $('pwInput').value = '';
+  await renderStylist();
+  toast('הסטייליסטית מחוברת');
+}
+
+/* ---------- My style sheet ---------- */
+
+let inspDraft = [];
+
+async function openStyle() {
+  $('styleInput').value = (await getMeta('style')) || '';
+  inspDraft = ((await getMeta('inspiration')) || []).slice();
+  renderInsp();
+  openSheet('styleSheet');
+}
+
+function renderInsp() {
+  const g = $('inspGrid');
+  g.textContent = '';
+  inspDraft.forEach((src, i) => {
+    const d = el('div', 'insp');
+    const im = el('img'); im.src = src; im.alt = ''; d.appendChild(im);
+    const x = el('button', null, '✕');
+    x.setAttribute('aria-label', 'הסרה');
+    x.onclick = () => { inspDraft.splice(i, 1); renderInsp(); };
+    d.appendChild(x);
+    g.appendChild(d);
+  });
+  if (inspDraft.length < MAX_INSPIRATION) {
+    const add = el('button', 'insp-add', '+');
+    add.setAttribute('aria-label', 'הוספת תמונת השראה');
+    add.onclick = () => $('inspInput').click();
+    g.appendChild(add);
+  }
+}
+
+async function onInspChosen(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const { img, url } = await loadImage(file);
+    inspDraft.push(resizeToDataURL(img, INSP_MAX, 0.82));
+    URL.revokeObjectURL(url);
+    renderInsp();
+  } catch (_) { toast('לא הצלחתי לטעון את התמונה'); }
+}
+
+async function saveStyle() {
+  await setMeta('style', $('styleInput').value.trim().slice(0, 6000));
+  await setMeta('inspiration', inspDraft.slice(0, MAX_INSPIRATION));
+  askPersistentStorage();
+  closeSheet('styleSheet');
+  await renderStylist();
+  toast('הסגנון נשמר');
 }
 
 /* ---------- Install hint ---------- */
@@ -441,6 +787,34 @@ function init() {
   $('restoreBtn').onclick = () => $('restoreInput').click();
   $('restoreInput').onchange = onRestoreChosen;
   $('search').oninput = (e) => { query = e.target.value; render(); };
+
+  // Stylist
+  $('tabCloset').onclick = () => setTab('closet');
+  $('tabStylist').onclick = () => setTab('stylist');
+  $('askBtn').onclick = () => askStylist();
+  $('pwSaveBtn').onclick = savePassword;
+  $('styleBtn').onclick = openStyle;
+  $('styleSaveBtn').onclick = saveStyle;
+  $('inspInput').onchange = onInspChosen;
+  $('anchorBtn').onclick = () => {
+    if (!editing) return;
+    anchorId = editing.id;
+    closeSheet('itemSheet');
+    setTab('stylist');
+  };
+  $('pwResetBtn').onclick = async () => {
+    await setMeta('stylistPassword', '');
+    closeSheet('settingsSheet');
+    setTab('stylist');
+    $('pwInput').focus();
+  };
+  const quick = $('quickChips');
+  QUICK_REQUESTS.forEach((q) => {
+    const c = el('button', 'chip', q);
+    c.type = 'button';
+    c.onclick = () => { $('requestInput').value = q; };
+    quick.appendChild(c);
+  });
 
   refresh().catch(() => {
     $('empty').hidden = true;

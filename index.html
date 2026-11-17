@@ -27,6 +27,7 @@
 
   <div id="banner" class="banner" hidden></div>
 
+  <div id="closetView">
   <div class="search-wrap">
     <input id="search" type="search" placeholder="חיפוש בתיאורים…" autocomplete="off">
   </div>
@@ -41,7 +42,53 @@
     </div>
   </main>
 
-  <button id="addBtn" class="fab" aria-label="הוספת בגד">+</button>
+  </div>
+
+  <div id="stylistView" hidden>
+    <section id="connectCard" class="panel" hidden>
+      <h2>חיבור הסטייליסטית</h2>
+      <p class="muted">הקלידי את הסיסמה האישית שהגדרת ב-Cloudflare. היא נשמרת רק באייפון הזה.</p>
+      <input id="pwInput" class="text-input" type="password" autocomplete="off" placeholder="סיסמה">
+      <button id="pwSaveBtn" class="wide-btn primary">חיבור</button>
+    </section>
+
+    <section class="panel">
+      <div class="panel-row">
+        <div>
+          <h2>הסגנון שלי</h2>
+          <p id="styleSummary" class="muted"></p>
+        </div>
+        <button id="styleBtn" class="pill">עריכה</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>מה נלבש?</h2>
+      <div id="anchorChip" class="anchor" hidden></div>
+      <textarea id="requestInput" rows="3" placeholder="למשל: תעשי לי לוק למחר — יום עבודה, צפוי חם"></textarea>
+      <div id="quickChips" class="quick"></div>
+      <button id="askBtn" class="wide-btn primary">✨ בקשי לוק</button>
+      <p id="askError" class="error" hidden></p>
+    </section>
+
+    <div id="thinking" class="thinking" hidden>
+      <div class="spinner"></div>
+      <div>הסטייליסטית עוברת על הארון שלך…</div>
+    </div>
+
+    <section id="lookPanel" class="panel look" hidden></section>
+
+    <section class="panel">
+      <h2>לוקים אהובים ❤️</h2>
+      <div id="favList" class="fav-list"></div>
+    </section>
+  </div>
+
+  <nav class="tabbar">
+    <button id="tabCloset" class="tab active"><span>👗</span>ארון</button>
+    <button id="addBtn" class="fab" aria-label="הוספת בגד">+</button>
+    <button id="tabStylist" class="tab"><span>✨</span>סטייליסטית</button>
+  </nav>
 
   <!-- Add / edit item -->
   <div id="itemSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="itemTitle">
@@ -75,8 +122,41 @@
         <p class="hint">בלי תמונה — התיאור הוא מה שיופיע בארון. כדאי לכתוב צבע, בד, גזרה ומתי לובשים.</p>
         <p id="itemError" class="error" hidden></p>
 
+        <button id="anchorBtn" class="wide-btn" hidden>✨ בני לי לוק עם הבגד הזה</button>
         <button id="deleteBtn" class="wide-btn danger" hidden>מחיקת הבגד</button>
       </div>
+    </div>
+  </div>
+
+  <!-- My style -->
+  <div id="styleSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="styleTitle">
+    <div class="sheet-panel">
+      <div class="sheet-head">
+        <button class="text-btn" data-close>ביטול</button>
+        <h2 id="styleTitle">הסגנון שלי</h2>
+        <button id="styleSaveBtn" class="text-btn strong">שמירה</button>
+      </div>
+      <div class="sheet-body">
+        <label class="field-label" for="styleInput">איך את אוהבת להתלבש?</label>
+        <textarea id="styleInput" rows="9" placeholder="אפשר להדביק כאן הודעה ארוכה: צבעים שאת אוהבת, גזרות, מה לא מחמיא לך, לאן את הולכת בדרך כלל…"></textarea>
+        <p class="hint">הסטייליסטית קוראת את זה בכל בקשה. נשמר רק באייפון.</p>
+        <label class="field-label">תמונות השראה (עד 8)</label>
+        <div id="inspGrid" class="insp-grid"></div>
+        <input id="inspInput" type="file" accept="image/*" hidden>
+        <p class="hint">לוקים שאהבת מאינסטגרם, מפינטרסט וכו׳. הן משמשות רק לכיוון — הסטייליסטית בוחרת רק מהארון שלך.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Saved look viewer -->
+  <div id="lookSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="lookSheetTitle">
+    <div class="sheet-panel">
+      <div class="sheet-head">
+        <span></span>
+        <h2 id="lookSheetTitle">לוק אהוב</h2>
+        <button class="text-btn strong" data-close>סגירה</button>
+      </div>
+      <div id="lookSheetBody" class="sheet-body"></div>
     </div>
   </div>
 
@@ -96,13 +176,20 @@
         </div>
 
         <button id="backupBtn" class="wide-btn primary">שמירת קובץ גיבוי</button>
-        <p class="hint">יוצר קובץ אחד עם כל הבגדים, התמונות והתיאורים. שמרי אותו ב-iCloud Drive („שמירה בקבצים”).</p>
+        <p class="hint">יוצר קובץ אחד עם כל הבגדים, התמונות, התיאורים, הסגנון והלוקים האהובים. שמרי אותו ב-iCloud Drive („שמירה בקבצים”).</p>
         <p class="muted" id="lastBackup"></p>
 
         <button id="restoreBtn" class="wide-btn">שחזור מקובץ גיבוי</button>
         <input id="restoreInput" type="file" accept=".json,application/json" hidden>
         <p class="hint">מוסיף לארון את הבגדים מהקובץ. בגדים שכבר בארון לא יימחקו.</p>
         <p id="settingsMsg" class="msg" hidden></p>
+
+        <div class="card-info small">
+          <p><b>הסטייליסטית</b></p>
+          <p id="stylistStatus" class="muted"></p>
+          <button id="pwResetBtn" class="pill">החלפת סיסמה</button>
+          <p class="muted" style="margin-top:8px">כשמבקשים לוק, התיאורים ותמונות קטנות של הבגדים נשלחים ל-Claude (Anthropic) כדי לבחור. הם לא נעשים ציבוריים.</p>
+        </div>
 
         <div class="card-info small">
           <p><b>חשוב לדעת</b></p>
@@ -112,7 +199,7 @@
             <li>כדאי לשמור גיבוי חדש אחרי שמוסיפים כמה בגדים.</li>
           </ul>
         </div>
-        <p class="version">גרסה 1.0</p>
+        <p class="version">גרסה 2.0</p>
       </div>
     </div>
   </div>

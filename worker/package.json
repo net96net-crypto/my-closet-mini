@@ -1,0 +1,14 @@
+{
+  "name": "my-closet-stylist",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.10.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.164.0"
+  }
+}
