@@ -6,6 +6,7 @@
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "ai": { "binding": "AI" },
   "vars": {
     "ALLOWED_ORIGINS": "https://net96net-crypto.github.io,http://localhost:8765"
   }

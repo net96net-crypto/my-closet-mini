@@ -24,8 +24,9 @@ const LOOK_SCHEMA = {
     item_ids: { type: 'array', items: { type: 'string' }, description: 'ids of the chosen closet items, top to bottom' },
     explanation: { type: 'string', description: 'Short Hebrew explanation: why these items work together and for the request' },
     tip: { type: 'string', description: 'Optional short Hebrew styling tip, or empty string' },
+    image_prompt: { type: 'string', description: 'English prompt for an image generator showing the look worn, or empty string if ok=false' },
   },
-  required: ['ok', 'title', 'item_ids', 'explanation', 'tip'],
+  required: ['ok', 'title', 'item_ids', 'explanation', 'tip', 'image_prompt'],
   additionalProperties: false,
 };
 
@@ -38,7 +39,11 @@ const SYSTEM = `את סטייליסטית אישית בתוך האפליקציה
 - להתחשב בסגנון האישי ובתמונות ההשראה, אם צורפו, ובבקשה עצמה (אירוע, מזג אוויר, תחושה).
 - פריט שמופיע רק עם תיאור (בלי תמונה) הוא פריט אמיתי לכל דבר.
 - אם אין בארון מספיק פריטים כדי להרכיב לוק סביר — ok=false, item_ids ריק, ובהסבר כתבי בעדינות מה חסר.
-- ההסבר: 2–3 משפטים. הטיפ: משפט אחד או ריק.`;
+- ההסבר: 2–3 משפטים. הטיפ: משפט אחד או ריק.
+- image_prompt: באנגלית, עבור מחולל תמונות שיצייר את הלוק על דוגמנית. תארי במדויק כל פריט שבחרת — צבע מדויק, גזרה, אורך, בד, פרטים בולטים — לפי התמונות והתיאורים, ובאותו סדר מלמעלה למטה. אל תוסיפי פריטים שלא בחרת (אם לא בחרת נעליים — כתבי simple neutral shoes). אל תתארי את פני הדוגמנית או גוף מסוים מעבר ל-"a woman". בלי טקסט, לוגואים או שמות מותגים. עד 90 מילים.`;
+
+const IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
+const IMAGE_STYLE = 'Full-body fashion catalog photograph, entire figure visible from head to toe with space above the head and below the feet, centered, standing naturally, front view, plain light warm-grey seamless studio background, soft even lighting, realistic fabric texture, sharp focus. Outfit: ';
 
 function corsHeaders(origin, env) {
   const allowed = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -151,6 +156,35 @@ function validate(raw) {
   return null;
 }
 
+async function authorized(request, env) {
+  const pw = request.headers.get('X-App-Password') || '';
+  if (!pw) return false;
+  return Boolean(env.APP_PASSWORD) && (await safeEqual(pw, env.APP_PASSWORD));
+}
+
+async function handleImage(request, env, cors) {
+  if (!env.AI) return json({ error: 'not_configured', message: 'שירות הציור לא מחובר.' }, 503, cors);
+  if (!(await authorized(request, env))) return json({ error: 'bad_password', message: 'הסיסמה של הסטייליסטית לא נכונה.' }, 401, cors);
+  let raw;
+  try { raw = await request.json(); } catch { return json({ error: 'bad_json', message: 'בקשה לא תקינה.' }, 400, cors); }
+  const prompt = str(raw && raw.prompt, 1200).trim();
+  if (!prompt) return json({ error: 'bad_request', message: 'חסר תיאור לתמונה.' }, 400, cors);
+  const seed = Number.isInteger(raw.seed) ? raw.seed : Math.floor(Math.random() * 1e9);
+  try {
+    const out = await env.AI.run(IMAGE_MODEL, { prompt: IMAGE_STYLE + prompt, steps: 8, seed });
+    if (!out || !out.image) throw new Error('no image');
+    return json({ image: 'data:image/jpeg;base64,' + out.image, seed }, 200, cors);
+  } catch (err) {
+    const msg = String(err && err.message || err);
+    const quota = /limit|quota|neuron|4006/i.test(msg);
+    return json({
+      error: quota ? 'image_quota' : 'image_error',
+      message: quota ? 'נגמרה מכסת התמונות החינמית להיום. הלוק עצמו עדיין עובד — התמונה תחזור מחר.' : 'לא הצלחתי לצייר את התמונה. נסי שוב.',
+      detail: msg.slice(0, 200),
+    }, 502, cors);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
@@ -161,13 +195,13 @@ export default {
     if (url.pathname === '/health') {
       return json({ ok: true, configured: Boolean(env.ANTHROPIC_API_KEY && env.APP_PASSWORD) }, 200, cors);
     }
+    if (url.pathname === '/image' && request.method === 'POST') return handleImage(request, env, cors);
     if (url.pathname !== '/stylist' || request.method !== 'POST') return json({ error: 'not_found' }, 404, cors);
 
     if (!env.ANTHROPIC_API_KEY || !env.APP_PASSWORD) {
       return json({ error: 'not_configured', message: 'השרת עוד לא הוגדר: חסר מפתח או סיסמה.' }, 503, cors);
     }
-    const pw = request.headers.get('X-App-Password') || '';
-    if (!pw || !(await safeEqual(pw, env.APP_PASSWORD))) {
+    if (!(await authorized(request, env))) {
       return json({ error: 'bad_password', message: 'הסיסמה של הסטייליסטית לא נכונה.' }, 401, cors);
     }
     const len = Number(request.headers.get('Content-Length') || 0);
@@ -239,6 +273,7 @@ export default {
       item_ids: chosen,
       explanation: str(out.explanation, 1500),
       tip: str(out.tip, 500),
+      image_prompt: str(out.image_prompt, 1200),
       usage: {
         input_tokens: msg.usage?.input_tokens ?? 0,
         output_tokens: msg.usage?.output_tokens ?? 0,

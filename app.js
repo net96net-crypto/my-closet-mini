@@ -22,7 +22,9 @@ const AI_IMAGE_MAX = 384; // longest side of photos sent to the stylist, px
 const INSP_MAX = 900;     // longest side of stored inspiration photos, px
 const MAX_INSPIRATION = 8;
 const BACKUP_FORMAT = 'my-closet-mini-backup';
-const STYLIST_URL = (window.STYLIST_URL_OVERRIDE || 'https://stylist.my-closet-mini.workers.dev') + '/stylist';
+const STYLIST_BASE = window.STYLIST_URL_OVERRIDE || 'https://stylist.my-closet-mini.workers.dev';
+const STYLIST_URL = STYLIST_BASE + '/stylist';
+const IMAGE_URL = STYLIST_BASE + '/image';
 
 /* ---------- Storage (IndexedDB, on this device only) ---------- */
 
@@ -652,6 +654,7 @@ function renderLook() {
     return;
   }
   p.appendChild(el('h2', null, currentLook.title || 'הלוק שלך'));
+  p.appendChild(lookFigure());
   const grid = el('div', 'look-items');
   currentLook.itemIds.forEach((id) => grid.appendChild(lookItemCard(id, { swappable: true })));
   p.appendChild(grid);
@@ -668,12 +671,70 @@ function renderLook() {
   if (currentLook.costCents != null) p.appendChild(el('p', 'cost', `עלות משוערת של הבקשה: כ-${currentLook.costCents.toFixed(1)} סנט`));
 }
 
+function lookFigure() {
+  const fig = el('div', 'look-figure');
+  const st = currentLook.imageState;
+  if (st === 'loading') {
+    const ph = el('div', 'figure-ph');
+    ph.appendChild(el('div', 'spinner'));
+    ph.appendChild(el('div', null, 'מציירת את הלוק…'));
+    fig.appendChild(ph);
+  } else if (st === 'done' && currentLook.image) {
+    const im = el('img'); im.src = currentLook.image; im.alt = 'המחשה של הלוק על דוגמנית';
+    fig.appendChild(im);
+    fig.appendChild(el('p', 'figure-note', 'המחשה בלבד — הבגדים בתמונה דומים לשלך, לא זהים. הפריטים האמיתיים מופיעים למטה.'));
+    const again = el('button', 'pill', '🎨 תמונה אחרת');
+    again.onclick = () => generateLookImage();
+    fig.appendChild(again);
+  } else if (st === 'error') {
+    const ph = el('div', 'figure-ph');
+    ph.appendChild(el('div', null, currentLook.imageError || 'לא הצלחתי לצייר את הלוק.'));
+    const retry = el('button', 'pill', 'נסי שוב');
+    retry.onclick = () => generateLookImage();
+    ph.appendChild(retry);
+    fig.appendChild(ph);
+  } else {
+    return document.createDocumentFragment();
+  }
+  return fig;
+}
+
+async function generateLookImage() {
+  const look = currentLook;
+  if (!look || !look.imagePrompt) return;
+  const pw = await getMeta('stylistPassword');
+  look.imageState = 'loading';
+  renderLook();
+  try {
+    const res = await fetch(IMAGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-App-Password': pw || '' },
+      body: JSON.stringify({ prompt: look.imagePrompt }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* handled below */ }
+    if (!res.ok || !data || !data.image) throw new Error((data && data.message) || 'לא הצלחתי לצייר את הלוק.');
+    look.image = data.image;
+    look.imageState = 'done';
+    if (look.savedId) {
+      const favs = (await getMeta('favorites')) || [];
+      const f = favs.find((x) => x.id === look.savedId);
+      if (f) { f.image = look.image; await setMeta('favorites', favs); await renderFavorites(); }
+    }
+  } catch (err) {
+    look.imageState = 'error';
+    look.imageError = err instanceof TypeError ? 'אין חיבור. נסי שוב.' : err.message;
+  }
+  if (currentLook === look) renderLook();
+}
+
 async function saveFavorite() {
   if (!currentLook || currentLook.savedId) return;
   const favs = (await getMeta('favorites')) || [];
   const fav = {
     id: newId(), title: currentLook.title, itemIds: currentLook.itemIds.slice(),
     explanation: currentLook.explanation, tip: currentLook.tip, request: currentLook.request,
+    image: currentLook.image || null,
     savedAt: new Date().toISOString(),
   };
   favs.unshift(fav);
@@ -693,7 +754,8 @@ async function renderFavorites() {
   favs.forEach((f) => {
     const b = el('button', 'fav');
     const minis = el('div', 'minis');
-    f.itemIds.slice(0, 4).forEach((id) => {
+    if (f.image) { const im = el('img'); im.src = f.image; im.alt = ''; minis.appendChild(im); }
+    f.itemIds.slice(0, f.image ? 3 : 4).forEach((id) => {
       const it = itemById(id);
       if (it && it.thumb) { const im = el('img'); im.src = it.thumb; im.alt = ''; minis.appendChild(im); }
       else minis.appendChild(el('div', 'mini-t'));
@@ -712,6 +774,12 @@ function openFavorite(f) {
   body.textContent = '';
   body.classList.add('look');
   $('lookSheetTitle').textContent = f.title || 'לוק אהוב';
+  if (f.image) {
+    const fig = el('div', 'look-figure');
+    const im = el('img'); im.src = f.image; im.alt = 'המחשה של הלוק';
+    fig.appendChild(im);
+    body.appendChild(fig);
+  }
   const grid = el('div', 'look-items');
   f.itemIds.forEach((id) => grid.appendChild(lookItemCard(id, { swappable: false })));
   body.appendChild(grid);
@@ -809,6 +877,7 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
     currentLook = {
       ok: data.ok, title: data.title, itemIds: data.item_ids || [], explanation: data.explanation, tip: data.tip,
       request, anchorId: anchor, excluded, savedId: null, costCents: estimateCents(data.usage),
+      imagePrompt: data.ok ? data.image_prompt || '' : '', image: null, imageState: null,
     };
   } catch (err) {
     const offline = err instanceof TypeError;
@@ -820,6 +889,7 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
     renderLook();
     if (currentLook) $('lookPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+  if (currentLook && currentLook.ok && currentLook.imagePrompt) generateLookImage();
 }
 
 async function savePassword() {
