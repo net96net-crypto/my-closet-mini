@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <header class="topbar">
@@ -30,6 +30,10 @@
   <div id="closetView">
   <div class="search-wrap">
     <input id="search" type="search" placeholder="חיפוש בתיאורים…" autocomplete="off">
+  </div>
+  <div id="illusBar" class="illus-bar" hidden>
+    <span id="illusBarText"></span>
+    <button id="illusAllBtn" class="pill accent">✨ צרי תמונות</button>
   </div>
   <nav id="chips" class="chips" aria-label="קטגוריות"></nav>
 
@@ -108,9 +112,12 @@
             <small>צילום או בחירה מהגלריה (לא חובה)</small>
           </div>
           <div id="photoBusy" class="photo-busy" hidden>מעבדת תמונה…</div>
+          <div id="illusBadge" class="illus-badge" hidden>המחשה</div>
         </div>
         <input id="photoInput" type="file" accept="image/*" hidden>
         <div class="photo-actions">
+          <button id="illusBtn" class="pill accent" hidden>✨ צרי תמונת המחשה מהתיאור</button>
+          <button id="illusAgainBtn" class="pill" hidden>🎨 המחשה אחרת</button>
           <button id="changePhotoBtn" class="pill" hidden>החלפת תמונה</button>
           <button id="removePhotoBtn" class="pill danger" hidden>הסרת תמונה</button>
         </div>
@@ -233,6 +240,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

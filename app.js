@@ -25,6 +25,7 @@ const BACKUP_FORMAT = 'my-closet-mini-backup';
 const STYLIST_BASE = window.STYLIST_URL_OVERRIDE || 'https://stylist.my-closet-mini.workers.dev';
 const STYLIST_URL = STYLIST_BASE + '/stylist';
 const IMAGE_URL = STYLIST_BASE + '/image';
+const ITEM_IMAGE_URL = STYLIST_BASE + '/item-image';
 
 /* ---------- Storage (IndexedDB, on this device only) ---------- */
 
@@ -136,6 +137,7 @@ let filter = 'all';
 let query = '';
 
 async function refresh() {
+  await refreshConnected();
   items = await getAllItems();
   items.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   render();
@@ -169,6 +171,7 @@ function render() {
   grid.textContent = '';
   visible.forEach((it) => grid.appendChild(card(it)));
   $('empty').hidden = n !== 0;
+  renderIllusBar();
   if (n !== 0 && visible.length === 0) {
     grid.appendChild(el('p', 'muted', 'לא נמצאו בגדים מתאימים.'));
   }
@@ -178,11 +181,12 @@ function card(it) {
   const b = el('button', 'item' + (it.thumb ? '' : ' text-only'));
   b.setAttribute('aria-label', `${catLabel(it.category)}: ${it.description || 'בלי תיאור'}`);
   if (it.thumb) {
-    const img = el('img', 'thumb');
+    const img = el('img', 'thumb' + (it.illustration ? ' illus' : ''));
     img.src = it.thumb;
     img.alt = '';
     img.loading = 'lazy';
     b.appendChild(img);
+    if (it.illustration) b.appendChild(el('span', 'tag-illus', 'המחשה'));
     const meta = el('div', 'meta');
     meta.appendChild(el('div', 'cat', catLabel(it.category)));
     if (it.description) { const d = el('div', 'desc', it.description); d.dir = 'auto'; meta.appendChild(d); }
@@ -214,6 +218,8 @@ function openItem(it) {
     category: it ? it.category : (filter !== 'all' ? filter : 'tops'),
     photo: it ? it.photo || null : null,
     thumb: it ? it.thumb || null : null,
+    illustration: it ? it.illustration === true : false,
+    illustrationPrompt: it ? it.illustrationPrompt || '' : '',
   };
   $('itemTitle').textContent = it ? 'עריכת בגד' : 'בגד חדש';
   $('descInput').value = it ? it.description || '' : '';
@@ -246,6 +252,11 @@ function renderPhoto() {
   $('photoBox').classList.toggle('has-photo', has);
   $('changePhotoBtn').hidden = !has;
   $('removePhotoBtn').hidden = !has;
+  $('illusBadge').hidden = !(has && draft.illustration);
+  $('photoPreview').classList.toggle('illus', has && draft.illustration);
+  $('illusBtn').hidden = has || !stylistConnected;
+  $('illusAgainBtn').hidden = !(has && draft.illustration && stylistConnected);
+  $('changePhotoBtn').textContent = draft.illustration ? 'החלפה בצילום אמיתי' : 'החלפת תמונה';
 }
 
 async function onPhotoChosen(e) {
@@ -258,6 +269,8 @@ async function onPhotoChosen(e) {
     const { photo, thumb } = await processPhoto(file);
     draft.photo = photo;
     draft.thumb = thumb;
+    draft.illustration = false;
+    draft.illustrationPrompt = '';
     renderPhoto();
     $('itemError').hidden = true;
   } catch (err) {
@@ -283,6 +296,8 @@ async function saveItem() {
     description,
     photo: draft.photo || null,
     thumb: draft.thumb || null,
+    illustration: Boolean(draft.photo) && draft.illustration === true,
+    illustrationPrompt: draft.photo && draft.illustration ? draft.illustrationPrompt || '' : '',
     createdAt: editing ? editing.createdAt : now,
     updatedAt: now,
   };
@@ -403,6 +418,8 @@ async function onRestoreChosen(e) {
     description: it.description,
     photo: it.photo || null,
     thumb: it.thumb || it.photo || null,
+    illustration: Boolean(it.photo) && it.illustration === true,
+    illustrationPrompt: typeof it.illustrationPrompt === 'string' ? it.illustrationPrompt.slice(0, 800) : '',
     createdAt: it.createdAt || new Date().toISOString(),
     updatedAt: it.updatedAt || it.createdAt || new Date().toISOString(),
   }));
@@ -443,6 +460,104 @@ async function onRestoreChosen(e) {
   if (extra.length) msg += ` שוחזרו גם: ${extra.join(', ')}.`;
   if (skipped) msg += ` ${skipped} פריטים פגומים דולגו.`;
   settingsMsg(msg);
+}
+
+/* ---------- Illustrations (AI picture from a text description) ---------- */
+
+let stylistConnected = false;
+let illusRunning = false;
+let illusStop = false;
+
+async function refreshConnected() {
+  stylistConnected = Boolean(await getMeta('stylistPassword'));
+}
+
+async function requestItemImage({ category, description, prompt }) {
+  const pw = await getMeta('stylistPassword');
+  if (!pw) throw new Error('קודם צריך לחבר את הסטייליסטית (בלשונית סטייליסטית).');
+  let res;
+  try {
+    res = await fetch(ITEM_IMAGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-App-Password': pw },
+      body: JSON.stringify({ category: catLabel(category), description, prompt: prompt || undefined }),
+    });
+  } catch (_) { throw new Error('אין חיבור. נסי שוב.'); }
+  let data = null;
+  try { data = await res.json(); } catch (_) { /* handled below */ }
+  if (!res.ok || !data || !data.image) {
+    const e = new Error((data && data.message) || 'לא הצלחתי לצייר את הבגד. נסי שוב.');
+    e.code = data && data.error;
+    throw e;
+  }
+  const img = new Image();
+  img.src = data.image;
+  await img.decode();
+  return {
+    photo: resizeToDataURL(img, PHOTO_MAX, 0.85),
+    thumb: resizeToDataURL(img, THUMB_MAX, 0.8),
+    prompt: data.prompt || prompt || '',
+  };
+}
+
+async function illustrateDraft(again) {
+  const description = $('descInput').value.trim();
+  if (!description) { showItemError('כדי לצייר את הבגד צריך קודם לכתוב תיאור.'); return; }
+  $('itemError').hidden = true;
+  $('photoBusy').textContent = 'מציירת את הבגד… (כ-10–20 שניות)';
+  $('photoBusy').hidden = false;
+  $('saveBtn').disabled = true;
+  $('illusBtn').disabled = true; $('illusAgainBtn').disabled = true;
+  try {
+    // "Another" keeps the same English description unless the Hebrew text was edited.
+    const sameText = editing && editing.description === description;
+    const r = await requestItemImage({ category: draft.category, description, prompt: again && sameText ? draft.illustrationPrompt : '' });
+    Object.assign(draft, { photo: r.photo, thumb: r.thumb, illustration: true, illustrationPrompt: r.prompt });
+    renderPhoto();
+  } catch (err) {
+    showItemError(err.message);
+  } finally {
+    $('photoBusy').hidden = true;
+    $('photoBusy').textContent = 'מעבדת תמונה…';
+    $('saveBtn').disabled = false;
+    $('illusBtn').disabled = false; $('illusAgainBtn').disabled = false;
+  }
+}
+
+function renderIllusBar() {
+  const missing = items.filter((i) => !i.photo && (i.description || '').trim());
+  const bar = $('illusBar');
+  bar.hidden = !(stylistConnected && (missing.length > 0 || illusRunning));
+  if (illusRunning) return;
+  $('illusBarText').textContent = missing.length === 1 ? 'לבגד אחד אין תמונה' : `ל-${missing.length} בגדים אין תמונה`;
+  $('illusAllBtn').textContent = '✨ צרי תמונות';
+}
+
+async function illustrateAll() {
+  if (illusRunning) { illusStop = true; $('illusAllBtn').textContent = 'עוצרת…'; return; }
+  const todo = items.filter((i) => !i.photo && (i.description || '').trim());
+  if (!todo.length) return;
+  if (!confirm(`ליצור תמונות המחשה ל-${todo.length} בגדים? זה לוקח כ-15 שניות לבגד. אפשר לעצור באמצע.`)) return;
+  illusRunning = true; illusStop = false;
+  $('illusAllBtn').textContent = 'עצירה';
+  let done = 0, failed = 0, quota = false;
+  for (const it of todo) {
+    if (illusStop) break;
+    $('illusBarText').textContent = `מציירת ${done + failed + 1} מתוך ${todo.length}…`;
+    try {
+      const r = await requestItemImage({ category: it.category, description: it.description });
+      const now = new Date().toISOString();
+      await putItem({ ...it, photo: r.photo, thumb: r.thumb, illustration: true, illustrationPrompt: r.prompt, updatedAt: now });
+      done++;
+      await refresh();
+    } catch (err) {
+      failed++;
+      if (err.code === 'image_quota' || err.code === 'bad_password' || err.code === 'bad_key') { quota = true; toast(err.message); break; }
+    }
+  }
+  illusRunning = false;
+  await refresh();
+  if (!quota) toast(`${done === 1 ? 'נוצרה תמונה אחת' : `נוצרו ${done} תמונות`}${failed ? (failed === 1 ? ', אחת לא הצליחה — אפשר לנסות שוב' : `, ${failed} לא הצליחו — אפשר לנסות שוב`) : ''}`);
 }
 
 /* ---------- Bulk add ---------- */
@@ -589,7 +704,7 @@ function setTab(name) {
   $('tabStylist').classList.toggle('active', stylist);
   $('addBtn').classList.toggle('ghost', stylist);
   window.scrollTo(0, 0);
-  if (stylist) renderStylist();
+  if (stylist) renderStylist(); else render();
 }
 
 const itemById = (id) => items.find((i) => i.id === id);
@@ -622,7 +737,7 @@ function lookItemCard(id, { swappable }) {
   const it = itemById(id);
   const box = el('div', 'look-item' + (it ? '' : ' gone'));
   if (it && it.thumb) {
-    const img = el('img'); img.src = it.thumb; img.alt = ''; box.appendChild(img);
+    const img = el('img', it.illustration ? 'illus' : null); img.src = it.thumb; img.alt = ''; box.appendChild(img);
     const cap = el('div', 'cap');
     cap.appendChild(el('div', 'cat', catLabel(it.category)));
     if (it.description) { const d = el('div', 'desc', it.description); d.dir = 'auto'; cap.appendChild(d); }
@@ -846,7 +961,7 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
   try {
     const payloadItems = [];
     for (const it of items) {
-      payloadItems.push({ id: it.id, category: catLabel(it.category), description: it.description || '', image: await aiImage(it) });
+      payloadItems.push({ id: it.id, category: catLabel(it.category), description: it.description || '', image: await aiImage(it), illustration: it.illustration === true });
     }
     const insp = (await getMeta('inspiration')) || [];
     const inspiration = [];
@@ -871,7 +986,7 @@ async function askStylist({ swapItemId = null, another = false } = {}) {
     let data = null;
     try { data = await res.json(); } catch (_) { /* handled below */ }
     if (!res.ok) {
-      if (res.status === 401) { await setMeta('stylistPassword', ''); $('connectCard').hidden = false; }
+      if (res.status === 401) { await setMeta('stylistPassword', ''); stylistConnected = false; $('connectCard').hidden = false; }
       throw new Error((data && data.message) || 'הסטייליסטית לא זמינה כרגע. נסי שוב.');
     }
     currentLook = {
@@ -896,6 +1011,7 @@ async function savePassword() {
   const v = $('pwInput').value.trim();
   if (!v) return;
   await setMeta('stylistPassword', v);
+  stylistConnected = true;
   $('pwInput').value = '';
   await renderStylist();
   toast('הסטייליסטית מחוברת');
@@ -979,7 +1095,10 @@ function init() {
   });
   $('photoBox').onclick = () => $('photoInput').click();
   $('changePhotoBtn').onclick = () => $('photoInput').click();
-  $('removePhotoBtn').onclick = () => { draft.photo = null; draft.thumb = null; renderPhoto(); };
+  $('removePhotoBtn').onclick = () => { draft.photo = null; draft.thumb = null; draft.illustration = false; draft.illustrationPrompt = ''; renderPhoto(); };
+  $('illusBtn').onclick = () => illustrateDraft(false);
+  $('illusAgainBtn').onclick = () => illustrateDraft(true);
+  $('illusAllBtn').onclick = illustrateAll;
   $('photoInput').onchange = onPhotoChosen;
   $('saveBtn').onclick = saveItem;
   $('deleteBtn').onclick = removeItem;
@@ -1011,7 +1130,7 @@ function init() {
     setTab('stylist');
   };
   $('pwResetBtn').onclick = async () => {
-    await setMeta('stylistPassword', '');
+    await setMeta('stylistPassword', ''); stylistConnected = false;
     closeSheet('settingsSheet');
     setTab('stylist');
     $('pwInput').focus();

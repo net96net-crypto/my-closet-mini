@@ -91,7 +91,8 @@ function buildContent(body) {
   // 1) Closet — stable part first so it can be cached between requests.
   text(`הארון של המשתמשת (${body.items.length} פריטים). כל פריט מסומן ב-id שלו:`);
   for (const it of body.items) {
-    const line = `id: ${it.id} | קטגוריה: ${it.category} | תיאור: ${it.description || '(אין תיאור — ראי תמונה)'}`;
+    let line = `id: ${it.id} | קטגוריה: ${it.category} | תיאור: ${it.description || '(אין תיאור — ראי תמונה)'}`;
+    if (it.illustration) line += ' | (התמונה היא המחשה שנוצרה מהתיאור — התיאור קובע)';
     const img = parseDataUrl(it.image);
     if (img) {
       text(line);
@@ -121,7 +122,7 @@ function buildContent(body) {
   return content;
 }
 
-async function askClaude(env, content) {
+async function askClaude(env, content, { system = SYSTEM, schema = LOOK_SCHEMA, effort = 'medium', maxTokens = 16000 } = {}) {
   const client = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
     maxRetries: 2,
@@ -130,10 +131,10 @@ async function askClaude(env, content) {
   });
   const params = {
     model: MODEL,
-    max_tokens: 16000,
-    system: SYSTEM,
+    max_tokens: maxTokens,
+    system,
     cache_control: { type: 'ephemeral' },
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: LOOK_SCHEMA } },
+    output_config: { effort, format: { type: 'json_schema', schema } },
     messages: [{ role: 'user', content }],
   };
   try {
@@ -162,6 +163,64 @@ async function authorized(request, env) {
   return Boolean(env.APP_PASSWORD) && (await safeEqual(pw, env.APP_PASSWORD));
 }
 
+async function runImage(env, fullPrompt, seed, cors, extra = {}) {
+  try {
+    const out = await env.AI.run(IMAGE_MODEL, { prompt: fullPrompt, steps: 8, seed });
+    if (!out || !out.image) throw new Error('no image');
+    return json({ image: 'data:image/jpeg;base64,' + out.image, seed, ...extra }, 200, cors);
+  } catch (err) {
+    const msg = String(err && err.message || err);
+    const quota = /limit|quota|neuron|4006/i.test(msg);
+    return json({
+      error: quota ? 'image_quota' : 'image_error',
+      message: quota ? 'נגמרה מכסת התמונות החינמית להיום. אפשר לנסות שוב מחר.' : 'לא הצלחתי לצייר את התמונה. נסי שוב.',
+      detail: msg.slice(0, 200),
+    }, 502, cors);
+  }
+}
+
+const ITEM_STYLE = 'E-commerce product photo of a single clothing item only, no person, no model, no mannequin, no hanger, neatly laid flat and centered, the whole item fully visible with margin around it, plain pure white background, soft even studio lighting, realistic fabric texture, sharp focus. Item: ';
+const ITEM_SYSTEM = 'You turn a short Hebrew description of one clothing item into a precise English description for an image generator. Describe only the item itself: type, exact colour(s), cut/fit, length, sleeves/neckline if relevant, fabric and texture, and visible details. Do not invent details that the description does not suggest; keep unknowns plain and neutral. No brand names, no text or logos, no people. Max 60 words.';
+const ITEM_SCHEMA = {
+  type: 'object',
+  properties: { prompt: { type: 'string', description: 'English description of the item for the image generator' } },
+  required: ['prompt'],
+  additionalProperties: false,
+};
+
+async function handleItemImage(request, env, cors) {
+  if (!env.AI) return json({ error: 'not_configured', message: 'שירות הציור לא מחובר.' }, 503, cors);
+  if (!(await authorized(request, env))) return json({ error: 'bad_password', message: 'הסיסמה של הסטייליסטית לא נכונה.' }, 401, cors);
+  let raw;
+  try { raw = await request.json(); } catch { return json({ error: 'bad_json', message: 'בקשה לא תקינה.' }, 400, cors); }
+  const description = str(raw && raw.description, 1500).trim();
+  const category = str(raw && raw.category, 40);
+  if (!description) return json({ error: 'bad_request', message: 'צריך תיאור כדי לצייר את הבגד.' }, 400, cors);
+
+  // Reuse an English prompt the app already has (e.g. "another image"), otherwise translate once.
+  let prompt = str(raw.prompt, 800).trim();
+  let usage = null;
+  if (!prompt) {
+    try {
+      const msg = await askClaude(env, [{ type: 'text', text: `קטגוריה: ${category}\nתיאור: ${description}` }],
+        { system: ITEM_SYSTEM, schema: ITEM_SCHEMA, effort: 'low', maxTokens: 4000 });
+      if (msg.stop_reason === 'refusal') throw new Error('refusal');
+      const tb = msg.content.find((b) => b.type === 'text');
+      prompt = str(JSON.parse(tb ? tb.text : '{}').prompt, 800).trim();
+      usage = {
+        input_tokens: msg.usage?.input_tokens ?? 0, output_tokens: msg.usage?.output_tokens ?? 0,
+        cache_read_input_tokens: msg.usage?.cache_read_input_tokens ?? 0, cache_creation_input_tokens: msg.usage?.cache_creation_input_tokens ?? 0,
+      };
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) return json({ error: 'bad_key', message: 'המפתח של Claude לא תקין.' }, 502, cors);
+      return json({ error: 'translate_error', message: 'לא הצלחתי להבין את התיאור. נסי שוב.' }, 502, cors);
+    }
+    if (!prompt) return json({ error: 'translate_error', message: 'לא הצלחתי להבין את התיאור. נסי שוב.' }, 502, cors);
+  }
+  const seed = Number.isInteger(raw.seed) ? raw.seed : Math.floor(Math.random() * 1e9);
+  return runImage(env, ITEM_STYLE + prompt, seed, cors, { prompt, usage });
+}
+
 async function handleImage(request, env, cors) {
   if (!env.AI) return json({ error: 'not_configured', message: 'שירות הציור לא מחובר.' }, 503, cors);
   if (!(await authorized(request, env))) return json({ error: 'bad_password', message: 'הסיסמה של הסטייליסטית לא נכונה.' }, 401, cors);
@@ -170,19 +229,7 @@ async function handleImage(request, env, cors) {
   const prompt = str(raw && raw.prompt, 1200).trim();
   if (!prompt) return json({ error: 'bad_request', message: 'חסר תיאור לתמונה.' }, 400, cors);
   const seed = Number.isInteger(raw.seed) ? raw.seed : Math.floor(Math.random() * 1e9);
-  try {
-    const out = await env.AI.run(IMAGE_MODEL, { prompt: IMAGE_STYLE + prompt, steps: 8, seed });
-    if (!out || !out.image) throw new Error('no image');
-    return json({ image: 'data:image/jpeg;base64,' + out.image, seed }, 200, cors);
-  } catch (err) {
-    const msg = String(err && err.message || err);
-    const quota = /limit|quota|neuron|4006/i.test(msg);
-    return json({
-      error: quota ? 'image_quota' : 'image_error',
-      message: quota ? 'נגמרה מכסת התמונות החינמית להיום. הלוק עצמו עדיין עובד — התמונה תחזור מחר.' : 'לא הצלחתי לצייר את התמונה. נסי שוב.',
-      detail: msg.slice(0, 200),
-    }, 502, cors);
-  }
+  return runImage(env, IMAGE_STYLE + prompt, seed, cors);
 }
 
 export default {
@@ -196,6 +243,7 @@ export default {
       return json({ ok: true, configured: Boolean(env.ANTHROPIC_API_KEY && env.APP_PASSWORD) }, 200, cors);
     }
     if (url.pathname === '/image' && request.method === 'POST') return handleImage(request, env, cors);
+    if (url.pathname === '/item-image' && request.method === 'POST') return handleItemImage(request, env, cors);
     if (url.pathname !== '/stylist' || request.method !== 'POST') return json({ error: 'not_found' }, 404, cors);
 
     if (!env.ANTHROPIC_API_KEY || !env.APP_PASSWORD) {
@@ -214,7 +262,7 @@ export default {
 
     const items = raw.items
       .filter((it) => it && typeof it.id === 'string')
-      .map((it) => ({ id: str(it.id, 80), category: str(it.category, 40), description: str(it.description, 1500), image: it.image }));
+      .map((it) => ({ id: str(it.id, 80), category: str(it.category, 40), description: str(it.description, 1500), image: it.image, illustration: it.illustration === true }));
     const ids = new Set(items.map((i) => i.id));
     const mode = raw.mode === 'swap' ? 'swap' : 'new';
     const look = Array.isArray(raw.look) ? raw.look.filter((id) => ids.has(id)) : [];
