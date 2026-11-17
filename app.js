@@ -217,6 +217,7 @@ function openItem(it) {
   $('descInput').value = it ? it.description || '' : '';
   $('deleteBtn').hidden = !it;
   $('anchorBtn').hidden = !it;
+  $('bulkOpenBtn').hidden = Boolean(it);
   $('itemError').hidden = true;
   $('saveBtn').disabled = false;
   renderCatPicker();
@@ -440,6 +441,135 @@ async function onRestoreChosen(e) {
   if (extra.length) msg += ` שוחזרו גם: ${extra.join(', ')}.`;
   if (skipped) msg += ` ${skipped} פריטים פגומים דולגו.`;
   settingsMsg(msg);
+}
+
+/* ---------- Bulk add ---------- */
+
+const CATEGORY_HINTS = [
+  ['dresses', ['שמלה', 'שמלת', 'אוברול', 'סרבל']],
+  ['skirts', ['חצאית']],
+  ['outer', ['ג׳קט', "ג'קט", 'גקט', 'מעיל', 'בלייזר', 'וסט', 'ז׳קט', 'פליז', 'טרנץ']],
+  ['knit', ['סריג', 'סוודר', 'קרדיגן', 'סווטשירט', 'קפוצ']],
+  ['pants', ['מכנס', 'ג׳ינס', "ג'ינס", 'גינס', 'טייץ', 'שורט', 'ברמודה']],
+  ['shoes', ['נעל', 'נעלי', 'סניקרס', 'מגפ', 'סנדל', 'כפכפ', 'בובה', 'עקב', 'מוקסינ', 'לואפר']],
+  ['bags', ['תיק', 'ארנק', 'קלאץ']],
+  ['accessories', ['צעיף', 'חגורה', 'שרשרת', 'עגיל', 'צמיד', 'כובע', 'משקפ', 'שעון', 'טבעת', 'סיכה', 'גרביים']],
+  ['tops', ['חולצ', 'טופ', 'גופיי', 'טישירט', 'טי שירט', 'בגד גוף', 'בלוז', 'קרופ']],
+];
+function guessCategory(text) {
+  const t = (text || '').toLowerCase();
+  for (const [cat, words] of CATEGORY_HINTS) if (words.some((w) => t.includes(w))) return cat;
+  return null;
+}
+
+let bulk = []; // [{ key, category, description, photo, thumb }]
+
+function openBulk() {
+  bulk = [];
+  $('bulkTextBox').hidden = true;
+  $('bulkText').value = '';
+  $('bulkError').hidden = true;
+  $('bulkProgress').hidden = true;
+  renderBulk();
+  openSheet('bulkSheet');
+}
+
+function renderBulk() {
+  const list = $('bulkList');
+  list.textContent = '';
+  bulk.forEach((d, i) => {
+    const card = el('div', 'bulk-card');
+    if (d.thumb) { const im = el('img', 'pic'); im.src = d.thumb; im.alt = ''; card.appendChild(im); }
+    else card.appendChild(el('div', 'pic', '📝'));
+    const f = el('div', 'fields');
+    const sel = document.createElement('select');
+    sel.setAttribute('aria-label', 'קטגוריה');
+    if (!d.category) { const o = el('option', null, 'בחרי קטגוריה…'); o.value = ''; sel.appendChild(o); }
+    CATEGORIES.forEach((c) => { const o = el('option', null, c.label); o.value = c.id; sel.appendChild(o); });
+    sel.value = d.category || '';
+    sel.onchange = () => { d.category = sel.value; };
+    const ta = document.createElement('textarea');
+    ta.rows = 2;
+    ta.placeholder = d.photo ? 'תיאור (לא חובה)' : 'תיאור';
+    ta.value = d.description;
+    ta.dir = 'auto';
+    ta.oninput = () => { d.description = ta.value; card.classList.remove('bad'); };
+    f.appendChild(sel); f.appendChild(ta);
+    card.appendChild(f);
+    const rm = el('button', 'rm', '✕');
+    rm.setAttribute('aria-label', 'הסרה מהרשימה');
+    rm.onclick = () => { bulk.splice(i, 1); renderBulk(); };
+    card.appendChild(rm);
+    list.appendChild(card);
+  });
+  $('bulkSaveBtn').disabled = bulk.length === 0;
+  $('bulkSaveBtn').textContent = bulk.length ? `שמירה (${bulk.length})` : 'שמירה';
+}
+
+async function onBulkPhotos(e) {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  const prog = $('bulkProgress');
+  prog.hidden = false;
+  $('bulkSaveBtn').disabled = true;
+  let failed = 0;
+  for (let i = 0; i < files.length; i++) {
+    prog.textContent = `מעבדת תמונה ${i + 1} מתוך ${files.length}…`;
+    try {
+      const { photo, thumb } = await processPhoto(files[i]);
+      bulk.push({ key: newId(), category: '', description: '', photo, thumb });
+    } catch (_) { failed++; }
+  }
+  prog.textContent = failed ? `${failed} תמונות לא נטענו.` : '';
+  prog.hidden = !failed;
+  renderBulk();
+}
+
+function onBulkText() {
+  const lines = $('bulkText').value.split('\n')
+    .map((l) => l.replace(/^\s*(?:[-–•*·]|\d+[.)])\s*/, '').trim())
+    .filter(Boolean);
+  if (!lines.length) return;
+  lines.forEach((line) => bulk.push({ key: newId(), category: guessCategory(line) || '', description: line, photo: null, thumb: null }));
+  $('bulkText').value = '';
+  $('bulkTextBox').hidden = true;
+  renderBulk();
+  toast(`${lines.length} בגדים נוספו לרשימה`);
+}
+
+async function saveBulk() {
+  const err = $('bulkError');
+  err.hidden = true;
+  const missing = bulk.filter((d) => !d.photo && !d.description.trim());
+  if (missing.length) {
+    renderBulk();
+    document.querySelectorAll('.bulk-card').forEach((c, i) => { if (!bulk[i].photo && !bulk[i].description.trim()) c.classList.add('bad'); });
+    err.textContent = 'לבגד בלי תמונה צריך תיאור (או למחוק אותו מהרשימה עם ✕).';
+    err.hidden = false;
+    return;
+  }
+  const base = Date.now();
+  const toSave = bulk.map((d, i) => {
+    const t = new Date(base - i).toISOString(); // keep list order, newest first
+    return {
+      id: newId(), category: d.category || guessCategory(d.description) || 'other',
+      description: d.description.trim(), photo: d.photo, thumb: d.thumb, createdAt: t, updatedAt: t,
+    };
+  });
+  $('bulkSaveBtn').disabled = true;
+  try {
+    await putItems(toSave);
+    askPersistentStorage();
+  } catch (_) {
+    err.textContent = 'השמירה נכשלה. ייתכן שאין מספיק מקום באייפון.';
+    err.hidden = false;
+    $('bulkSaveBtn').disabled = false;
+    return;
+  }
+  closeSheet('bulkSheet');
+  await refresh();
+  toast(`${toSave.length} בגדים נוספו לארון`);
 }
 
 /* ---------- Stylist ---------- */
@@ -787,6 +917,14 @@ function init() {
   $('restoreBtn').onclick = () => $('restoreInput').click();
   $('restoreInput').onchange = onRestoreChosen;
   $('search').oninput = (e) => { query = e.target.value; render(); };
+
+  // Bulk add
+  $('bulkOpenBtn').onclick = () => { closeSheet('itemSheet'); openBulk(); };
+  $('bulkPhotosBtn').onclick = () => $('bulkPhotosInput').click();
+  $('bulkPhotosInput').onchange = onBulkPhotos;
+  $('bulkTextToggle').onclick = () => { $('bulkTextBox').hidden = !$('bulkTextBox').hidden; if (!$('bulkTextBox').hidden) $('bulkText').focus(); };
+  $('bulkTextAdd').onclick = onBulkText;
+  $('bulkSaveBtn').onclick = saveBulk;
 
   // Stylist
   $('tabCloset').onclick = () => setTab('closet');

@@ -99,6 +99,7 @@
         <button id="saveBtn" class="text-btn strong">שמירה</button>
       </div>
       <div class="sheet-body">
+        <button id="bulkOpenBtn" class="bulk-link" hidden>➕ להוסיף כמה בגדים בבת אחת?</button>
         <div id="photoBox" class="photo-box">
           <img id="photoPreview" alt="" hidden>
           <div id="photoEmpty" class="photo-empty">
@@ -124,6 +125,32 @@
 
         <button id="anchorBtn" class="wide-btn" hidden>✨ בני לי לוק עם הבגד הזה</button>
         <button id="deleteBtn" class="wide-btn danger" hidden>מחיקת הבגד</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bulk add -->
+  <div id="bulkSheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="bulkTitle">
+    <div class="sheet-panel">
+      <div class="sheet-head">
+        <button class="text-btn" data-close>ביטול</button>
+        <h2 id="bulkTitle">כמה בגדים בבת אחת</h2>
+        <button id="bulkSaveBtn" class="text-btn strong" disabled>שמירה</button>
+      </div>
+      <div class="sheet-body">
+        <div class="bulk-sources">
+          <button id="bulkPhotosBtn" class="wide-btn">📷 בחירת כמה תמונות</button>
+          <input id="bulkPhotosInput" type="file" accept="image/*" multiple hidden>
+          <button id="bulkTextToggle" class="wide-btn">📝 הדבקת רשימה בטקסט</button>
+          <div id="bulkTextBox" hidden>
+            <textarea id="bulkText" rows="7" placeholder="בגד אחד בכל שורה, למשל:&#10;חולצת פשתן לבנה מכופתרת&#10;ג׳ינס כחול כהה בגזרה ישרה&#10;סניקרס לבנות"></textarea>
+            <button id="bulkTextAdd" class="wide-btn primary">הוספת השורות לרשימה</button>
+          </div>
+        </div>
+        <p id="bulkProgress" class="muted" hidden></p>
+        <div id="bulkList" class="bulk-list"></div>
+        <p class="hint">אפשר לשנות קטגוריה ותיאור לכל בגד לפני השמירה. בגד בלי תמונה צריך תיאור.</p>
+        <p id="bulkError" class="error" hidden></p>
       </div>
     </div>
   </div>
