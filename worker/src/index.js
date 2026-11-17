@@ -172,7 +172,7 @@ function errDetail(err) {
 
 async function runImage(env, fullPrompt, seed, cors, extra = {}) {
   try {
-    const out = await env.AI.run(IMAGE_MODEL, { prompt: fullPrompt, steps: 8, seed });
+    const out = await env.AI.run(IMAGE_MODEL, { prompt: fullPrompt, steps: 8 });
     if (!out || !out.image) throw new Error('no image');
     return json({ image: 'data:image/jpeg;base64,' + out.image, seed, ...extra }, 200, cors);
   } catch (err) {
